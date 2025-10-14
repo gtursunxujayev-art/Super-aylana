@@ -1,7 +1,7 @@
 'use client'
 import useSWR from 'swr'
 import { useEffect, useMemo, useState } from 'react'
-import Wheel from '../components/Wheel'
+import Wheel from './components/Wheel' // ✅ fixed path
 
 type StateRes = {
   state: { status: 'IDLE' | 'SPINNING'; userName?: string | null; tier?: number | null; resultTitle?: string | null }
@@ -144,19 +144,13 @@ export default function Page() {
             Spin (-{tier})
           </button>
 
-          {allowGrant && (
+          {process.env.NEXT_PUBLIC_ALLOW_SELF_GRANT === 'true' && (
             <div style={card}>
               <div style={title}>Demo: Coins</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={btn} onClick={() => grant(50)}>
-                  +50
-                </button>
-                <button style={btn} onClick={() => grant(100)}>
-                  +100
-                </button>
-                <button style={btn} onClick={() => grant(200)}>
-                  +200
-                </button>
+                <button style={btn} onClick={() => grant(50)}>+50</button>
+                <button style={btn} onClick={() => grant(100)}>+100</button>
+                <button style={btn} onClick={() => grant(200)}>+200</button>
               </div>
               <div style={{ color: '#64748b', fontSize: 12, marginTop: 6 }}>
                 Panel faqat <code>NEXT_PUBLIC_ALLOW_SELF_GRANT=true</code> bo‘lganda ko‘rinadi.
@@ -209,7 +203,7 @@ export default function Page() {
 /* tiny style tokens */
 const card: React.CSSProperties = {
   background: '#0b1220',
-  border: '1px solid #142035',
+  border: '1px solid '#142035',
   borderRadius: 12,
   padding: 14,
 }
