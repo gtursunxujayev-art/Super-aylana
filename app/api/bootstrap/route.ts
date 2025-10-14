@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@/app/lib/prisma'
+import { prisma } from '../../lib/prisma'            // ⬅️ relative import
 import { SignJWT, jwtVerify } from 'jose'
 import { z } from 'zod'
 
@@ -31,9 +31,11 @@ export async function POST(req: Request) {
   return res
 }
 
-// helper you can import in APIs
-export async function getUserIdFromCookie(cookies: Headers): Promise<string|null> {
-  const sid = cookies.get('cookie')?.match(/sid=([^;]+)/)?.[1] ?? cookies.get('sid') ?? null
+// helper used by other APIs (keep export)
+export async function getUserIdFromCookie(headers: Headers): Promise<string | null> {
+  const rawCookie = headers.get('cookie') || ''
+  const m = rawCookie.match(/(?:^|;\s*)sid=([^;]+)/)
+  const sid = m?.[1]
   if (!sid) return null
   try {
     const { payload } = await jwtVerify(sid, secret)
