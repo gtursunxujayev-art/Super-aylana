@@ -2,7 +2,13 @@
 import useSWR from 'swr'
 import { useEffect, useMemo, useState } from 'react'
 import Wheel from '@/components/Wheel'
-import { api, post } from './lib/api'
+
+async function api<T>(url:string, init?:RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, headers:{ 'content-type':'application/json', ...(init?.headers||{}) } })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+async function post<T>(url:string, body:any){ return api<T>(url,{method:'POST',body:JSON.stringify(body)}) }
 
 type StateRes = {
   state: { status:'IDLE'|'SPINNING', userName?:string|null, tier?:number|null, resultTitle?:string|null }
@@ -12,40 +18,35 @@ type StateRes = {
 }
 
 export default function Page(){
-  const { data, mutate, isLoading } = useSWR<StateRes>('/api/state', (url)=>api<StateRes>(url), { refreshInterval: 3000 })
-  const { data: wins, mutate: refWins } = useSWR('/api/wins?take=5', (url)=>api<any[]>(url), { refreshInterval: 4000 })
-  const [tier, setTier] = useState<50|100|200>(50)
-  const [authDone, setAuthDone] = useState(false)
-  const [spinning, setSpinning] = useState(false)
-  const balance = useMemo(()=>{
-    // pick “me” by last username from Telegram (not stored; for demo we show total list anyway)
-    return undefined
-  },[data])
+  const { data, mutate } = useSWR<StateRes>('/api/state', (u)=>api<StateRes>(u), { refreshInterval: 3000 })
+  const { data: wins, mutate: refWins } = useSWR<any[]>('/api/wins?take=5', (u)=>api<any[]>(u), { refreshInterval: 4000 })
+  const { data: meRes, mutate: refMe } = useSWR<{ok:boolean; me?:{id:string;username:string;balance:number}}>('/api/me', (u)=>api(u), { refreshInterval: 4000 })
+  const me = meRes?.me
 
-  // Telegram WebApp bootstrap or local demo
+  const [tier, setTier] = useState<50|100|200>(50)
+  const [spinning, setSpinning] = useState(false)
+
+  // Bootstrap: Telegram WebApp OR demo user (already handled in /api/bootstrap)
   useEffect(()=>{
-    const w = window as any
-    const tg = w?.Telegram?.WebApp
-    async function boot(){
+    (async()=>{
+      const w = window as any
+      const tg = w?.Telegram?.WebApp
       if (tg?.initDataUnsafe?.user) {
         const u = tg.initDataUnsafe.user
-        await fetch('/api/bootstrap', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ tgId:String(u.id), username: u.username || `${u.first_name||'User'} ${u.last_name||''}`.trim() }) })
-        setAuthDone(true); mutate()
+        await post('/api/bootstrap', { tgId:String(u.id), username: u.username || `${u.first_name||'User'} ${u.last_name||''}`.trim() })
       } else {
-        // local demo: one-time create random demo user
         const id = localStorage.getItem('demoUid') || String(Math.floor(Math.random()*1e12))
         localStorage.setItem('demoUid', id)
         const name = localStorage.getItem('demoName') || `Guest${String(id).slice(-4)}`
         localStorage.setItem('demoName', name)
-        await fetch('/api/bootstrap', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ tgId:id, username:name }) })
-        setAuthDone(true); mutate()
+        await post('/api/bootstrap', { tgId:id, username:name })
       }
-    }
-    boot()
-  },[mutate])
+      mutate(); refMe()
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
 
   const slices = useMemo(()=>{
-    // show placeholder labels; actual result comes from backend
     const base = ['Another spin', tier===50?'+75 coins': tier===100?'+150 coins':'+300 coins']
     const rest = Array.from({length:10}, (_,i)=> `Prize ${i+1}`)
     return [...base, ...rest].slice(0,12).map(s=>({ label:s }))
@@ -55,8 +56,11 @@ export default function Page(){
     setSpinning(true)
     try {
       const res = await post<{ ok:true; durationMs:number; result:{title:string, coinDelta:number} }>('/api/spin', { tier: String(tier) })
-      // let animation run roughly durationMs then refresh
-      setTimeout(()=>{ mutate(); refWins(); setSpinning(false); alert(`Siz "${res.result.title}" yutib oldingiz 🎉`) }, res.durationMs)
+      setTimeout(async ()=>{
+        await Promise.all([mutate(), refWins(), refMe()])
+        setSpinning(false)
+        alert(`"${me?.username || 'Foydalanuvchi'}", siz "${res.result.title}" yutib oldingiz 🎉`)
+      }, res.durationMs)
     } catch (e:any) {
       setSpinning(false)
       const msg = String(e?.message||e)
@@ -67,6 +71,14 @@ export default function Page(){
   }
 
   const busy = data?.state.status === 'SPINNING' || spinning
+  const allowGrant = process.env.NEXT_PUBLIC_ALLOW_SELF_GRANT === 'true'
+
+  async function grant(n:number=50){
+    try{
+      await post('/api/dev/grant', { coins:n })
+      await Promise.all([refMe(), mutate()])
+    }catch{ /* ignore */ }
+  }
 
   return (
     <div className="mx-auto max-w-6xl p-4 grid grid-cols-12 gap-4">
@@ -103,12 +115,35 @@ export default function Page(){
             </button>
           ))}
         </div>
-        <div className="text-sm text-gray-300">{data?.state.status==='SPINNING' ? 'Keyingi o‘yinchi tayyor!' : 'Aylantirishga tayyormisiz?'}</div>
+        <div className="text-sm text-gray-300">
+          {data?.state.status==='SPINNING' ? 'Keyingi o‘yinchi tayyor!' : 'Aylantirishga tayyormisiz?'}
+        </div>
+
         <Wheel slices={slices} spinning={busy} durationMs={4200}/>
-        <div>Balans: <b>{/* not personal here */}</b></div>
+
+        <div className="text-sm">
+          <span className="mr-2">Foydalanuvchi:</span>
+          <b>{me?.username || '...'}</b>
+          <span className="ml-4">Balans:</span>
+          <b className="ml-1">{me?.balance ?? '...'}</b>
+        </div>
+
         <button className="btn" onClick={doSpin} disabled={busy}>
           Spin (-{tier})
         </button>
+
+        {/* Demo toolbar */}
+        {allowGrant && (
+          <div className="card mt-3">
+            <div className="font-semibold mb-2">Demo: Coins</div>
+            <div className="flex gap-2">
+              <button className="btn" onClick={()=>grant(50)}>+50</button>
+              <button className="btn" onClick={()=>grant(100)}>+100</button>
+              <button className="btn" onClick={()=>grant(200)}>+200</button>
+            </div>
+            <p className="mt-2 text-xs text-gray-500">This panel is visible only when NEXT_PUBLIC_ALLOW_SELF_GRANT=true.</p>
+          </div>
+        )}
 
         <details className="card">
           <summary>Barcha sovg‘alar (narxlari bilan) ▼</summary>
