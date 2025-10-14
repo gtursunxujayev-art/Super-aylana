@@ -203,7 +203,7 @@ export default function Page() {
 /* tiny style tokens */
 const card: React.CSSProperties = {
   background: '#0b1220',
-  border: '1px solid '#142035',
+  border: '1px solid #142035',
   borderRadius: 12,
   padding: 14,
 }
