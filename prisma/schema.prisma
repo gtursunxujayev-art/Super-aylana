@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  tgId          String   @unique
+  username      String
+  createdAt     DateTime @default(now())
+  balance       Int      @default(0)
+  // whether to show on main page list
+  visible       Boolean  @default(true)
+
+  spins         Spin[]
+  wins          Win[]
+  balanceEvents BalanceEvent[]
+}
+
+model Prize {
+  id         String   @id @default(cuid())
+  title      String
+  coinCost   Int      // 50 / 100 / 200 tier item cost (group tag)
+  imageUrl   String?
+  active     Boolean  @default(true)
+  showInStore Boolean @default(false) // appear in store section
+  createdAt  DateTime @default(now())
+}
+
+model Spin {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  tier       Int      // 50 | 100 | 200 (price spent)
+  startedAt  DateTime @default(now())
+  durationMs Int
+  result     String?  // Prize.title OR "+coins" OR "another spin"
+  completed  Boolean  @default(false)
+}
+
+model Win {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  prizeId   String?
+  prize     Prize?   @relation(fields: [prizeId], references: [id])
+  title     String   // snapshot title (prize or bonus text)
+  imageUrl  String?
+  createdAt DateTime @default(now())
+}
+
+model BalanceEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  delta     Int
+  reason    String
+  createdAt DateTime @default(now())
+}
+
+model SpinState {
+  id          String   @id // always 'global'
+  status      String   // 'IDLE' | 'SPINNING'
+  spinStartAt DateTime?
+  durationMs  Int?
+  tier        Int?
+  userName    String?
+  resultTitle String?
+  updatedAt   DateTime @updatedAt
+}
