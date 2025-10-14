@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '../../lib/prisma'          // relative import
-import { getUserIdFromCookie } from '../bootstrap/route' // sibling folder
+import { prisma } from '../../lib/prisma'
+import { getUserIdFromCookie } from '../../lib/auth'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
