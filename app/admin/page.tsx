@@ -31,12 +31,13 @@ export default function AdminPage() {
   }
   async function deleteUser(userId: string) {
     if (!confirm('Delete this user and all their records?')) return
-    await fetch('/api/admin/users', {
+    const res = await fetch(`/api/admin/users?id=${encodeURIComponent(userId)}`, {
       method: 'DELETE',
-      headers: { 'content-type': 'application/json', 'x-admin-key': getAdminKey() ?? '' },
-      body: JSON.stringify({ id: userId })
+      headers: { 'x-admin-key': getAdminKey() ?? '' },
+      cache: 'no-store',
     })
-    refUsers()
+    if (!res.ok) alert('Delete failed')
+    await refUsers()
   }
 
   async function addPrize(p: { title: string; coinCost: number; imageUrl?: string }) { await adminPost('/api/admin/prizes', p); refPrizes() }
@@ -100,7 +101,12 @@ export default function AdminPage() {
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           <button style={btn} onClick={() => giveCoins(u.id, coinAmount)}>+{coinAmount}</button>
                           <button style={btnSecondary} onClick={() => removeCoins(u.id, coinAmount)}>-{coinAmount}</button>
-                          <button style={{ ...btnSecondary, borderColor: '#7f1d1d', color: '#fecaca' }} onClick={() => deleteUser(u.id)}>Delete</button>
+                          <button
+                            style={{ ...btnSecondary, borderColor: '#7f1d1d', color: '#fecaca' }}
+                            onClick={() => deleteUser(u.id)}
+                          >
+                            Delete
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -110,7 +116,7 @@ export default function AdminPage() {
             </div>
           </section>
 
-          {/* Prizes block unchanged from your last version (keep your existing code here) */}
+          {/* keep your existing Prizes UI below */}
           {/* ... */}
         </>
       )}
