@@ -37,18 +37,18 @@ model Prize {
   // Relations
   wins Win[]
 
-  @@unique([title, coinCost]) // helps prevent duplicates in the store
+  @@unique([title, coinCost])
 }
 
 model Win {
   id        String   @id @default(cuid())
   userId    String
-  prizeId   String?
+  prizeId   String?    // optional foreign key
   title     String
   createdAt DateTime @default(now())
 
-  user   User  @relation(fields: [userId], references: [id])
-  prize  Prize @relation(fields: [prizeId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+  prize  Prize? @relation(fields: [prizeId], references: [id]) // <-- make relation optional
 }
 
 model Spin {
@@ -75,10 +75,9 @@ model SpinState {
 model BalanceEvent {
   id        String   @id @default(cuid())
   userId    String
-  delta     Int       // positive or negative
+  delta     Int
   reason    String
   createdAt DateTime @default(now())
 
-  // Relations
   user User @relation(fields: [userId], references: [id])
 }
