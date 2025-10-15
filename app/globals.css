@@ -1,0 +1,26 @@
+/* keep whatever you already had; add/replace with these layout rules */
+
+:root { color-scheme: dark; }
+html, body { margin:0; padding:0; background:#0a0f1a; color:#e5e7eb; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+
+/* Desktop: 3-column grid */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr);
+  gap: 16px;
+}
+
+/* On mobile stack sections in custom order */
+@media (max-width: 900px) {
+  .layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .section { width: 100%; }
+  .section-center { order: 1; }
+  .section-users  { order: 2; }
+  .section-wins   { order: 3; }
+  .section-terms  { order: 4; }
+  .section-store  { order: 5; }
+}
