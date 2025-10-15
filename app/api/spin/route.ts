@@ -21,27 +21,36 @@ function pickWeighted<T extends WheelItem>(arr: T[]): T {
 
 async function buildWheel(tier: number): Promise<WheelItem[]> {
   const sameTier = await prisma.prize.findMany({ where: { active: true, coinCost: tier } })
+
+  // next tier rules
   const nextTier = tier === 50 ? 100 : tier === 100 ? 200 : 500
 
+  // two random next-tier prizes (harder), pulled from DB if available
   let nextTierPrizes: WheelItem[] = []
-  if (nextTier !== 500) {
-    const nt = await prisma.prize.findMany({ where: { active: true, coinCost: nextTier } })
-    nt.sort(() => Math.random() - 0.5)
-    nextTierPrizes = nt.slice(0, 2).map(p => ({ key: 'p:' + p.id, title: p.title, weight: 1 / 3, prizeId: p.id, imageUrl: p.imageUrl || undefined }))
-  } else {
+  const ntFromDb = await prisma.prize.findMany({ where: { active: true, coinCost: nextTier } })
+  if (ntFromDb.length > 0) {
+    // difficulty: 3x for 50→100/100→200, 5x for 200→500
+    const hardWeight = nextTier === 500 ? 0.2 : 1/3
+    ntFromDb.sort(() => Math.random() - 0.5)
+    nextTierPrizes = ntFromDb.slice(0, 2).map(p => ({
+      key: 'p:' + p.id, title: p.title, weight: hardWeight, prizeId: p.id, imageUrl: p.imageUrl || undefined
+    }))
+  } else if (nextTier === 500) {
+    // fallback generic “500 coin sovg‘a” if no 500-tier items exist
     nextTierPrizes = [
-      { key: '500a', title: '500 coin sovg‘a', weight: 1 / 5, coinDelta: 500 },
-      { key: '500b', title: '500 coin sovg‘a', weight: 1 / 5, coinDelta: 500 },
+      { key: '500a', title: '500 coin sovg‘a', weight: 0.2, coinDelta: 500 },
+      { key: '500b', title: '500 coin sovg‘a', weight: 0.2, coinDelta: 500 },
     ]
   }
 
   const list: WheelItem[] = [
     { key: 'again', title: 'Another spin', weight: 1, coinDelta: 0 },
-    { key: '+bonus', title: `+${tier === 50 ? 75 : tier === 100 ? 150 : 300} coins`, weight: 0.5, coinDelta: tier === 50 ? 75 : tier === 100 ? 150 : 300 },
+    { key: '+bonus', title: `+${tier === 50 ? 75 : tier === 100 ? 150 : 300} coins`, weight: tier === 200 ? 0.5 : 0.5, coinDelta: tier === 50 ? 75 : tier === 100 ? 150 : 300 },
     ...nextTierPrizes,
     ...sameTier.map(p => ({ key: 'p:' + p.id, title: p.title, weight: 1, prizeId: p.id, imageUrl: p.imageUrl || undefined })),
   ]
 
+  // pad to ~12 slices
   while (list.length < 12 && sameTier.length > 0) {
     const p = sameTier[Math.floor(Math.random() * sameTier.length)]
     list.push({ key: 'p:' + p.id, title: p.title, weight: 1, prizeId: p.id, imageUrl: p.imageUrl || undefined })
@@ -59,15 +68,11 @@ export async function POST(req: Request) {
   return prisma.$transaction(async (tx) => {
     let state = await tx.spinState.findUnique({ where: { id: 'global' } })
     if (!state) state = await tx.spinState.create({ data: { id: 'global', status: 'IDLE' } })
-    if (state.status === 'SPINNING') {
-      return NextResponse.json({ ok: false, error: 'BUSY' }, { status: 409 })
-    }
+    if (state.status === 'SPINNING') return NextResponse.json({ ok: false, error: 'BUSY' }, { status: 409 })
 
     const user = await tx.user.findUnique({ where: { id: uid } })
     if (!user) return NextResponse.json({ ok: false, error: 'NOUSER' }, { status: 400 })
-    if (user.balance < price) {
-      return NextResponse.json({ ok: false, error: 'NOT_ENOUGH_COINS' }, { status: 402 })
-    }
+    if (user.balance < price) return NextResponse.json({ ok: false, error: 'NOT_ENOUGH_COINS' }, { status: 402 })
 
     const durationMs = 4200
     await tx.user.update({ where: { id: uid }, data: { balance: { decrement: price } } })
