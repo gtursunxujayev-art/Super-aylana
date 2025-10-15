@@ -6,22 +6,40 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function GET() {
-  const state = await prisma.spinState.findUnique({ where: { id: 'global' } })
-  const last = await prisma.win.findFirst({
-    orderBy: { createdAt: 'desc' },
-    include: { user: { select: { username: true } }, prize: { select: { imageUrl: true } } }
-  })
+  const [state, last5] = await Promise.all([
+    prisma.spinState.findUnique({ where: { id: 'global' } }),
+    prisma.win.findMany({
+      take: 5,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { username: true } },
+        prize: { select: { title: true, imageUrl: true } },
+      },
+    }),
+  ])
 
   return NextResponse.json({
     ok: true,
     spinning: state?.status === 'SPINNING',
+    status: state?.status ?? 'IDLE',
+
+    // existing columns…
+    spinStartAt: state?.spinStartAt ?? null,
+    durationMs: state?.durationMs ?? null,
+    tier: state?.tier ?? null,
+    userName: state?.userName ?? null,
+    resultTitle: state?.resultTitle ?? null,
+
+    // NEW: who is spinning (null if idle)
     byUserId: state?.byUserId ?? null,
-    lastWin: last ? {
-      id: last.id,
-      username: last.user.username,
-      title: last.title,
-      imageUrl: last.prize?.imageUrl ?? null,
-      at: last.createdAt
-    } : null
+
+    lastWins: last5.map((w) => ({
+      id: w.id,
+      username: w.user.username,
+      title: w.title,
+      prizeTitle: w.prize?.title ?? null,
+      imageUrl: w.prize?.imageUrl ?? null,
+      createdAt: w.createdAt,
+    })),
   })
 }
