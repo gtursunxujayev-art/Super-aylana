@@ -32,9 +32,6 @@ model Prize {
   createdAt   DateTime @default(now())
 
   wins        Win[]
-
-  // <-- Add composite unique so upsert(where: { title_coinCost: { ... } }) compiles
-  @@unique([title, coinCost], name: "title_coinCost")
 }
 
 model Win {
