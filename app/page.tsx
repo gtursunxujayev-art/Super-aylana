@@ -27,14 +27,14 @@ export default function Page() {
   const [tier, setTier] = useState<50 | 100 | 200>(50)
   const [spinning, setSpinning] = useState(false)
 
-  // fetch real wheel labels for selected tier
+  // real labels for the wheel
   const { data: wheelData, mutate: refWheel } = useSWR<{ ok: boolean; labels: string[] }>(
     `/api/wheel?tier=${tier}`,
     (u) => api(u),
     { refreshInterval: 0 }
   )
 
-  // Bootstrap user (Telegram or Demo)
+  // bootstrap user
   useEffect(() => {
     ;(async () => {
       try {
@@ -83,14 +83,26 @@ export default function Page() {
     }
   }
 
+  async function buy(prizeId: string, title: string, cost: number) {
+    try {
+      const res = await post<{ ok: boolean; title: string; cost: number }>('/api/store/buy', { prizeId })
+      alert(`"${me?.username || 'Foydalanuvchi'}", siz do‘kondan "${res.title}" ni ${cost} tangaga oldingiz 🎉`)
+      await Promise.all([refMe(), refState(), refWins()])
+    } catch (e: any) {
+      const msg = String(e?.message || e)
+      if (msg.includes('NOT_ENOUGH_COINS')) alert('Tangalar yetarli emas.')
+      else alert('Sotib olishda xatolik.')
+    }
+  }
+
   const busy = state?.state.status === 'SPINNING' || spinning
 
   return (
-    <div style={{ maxWidth: 1120, margin: '0 auto', padding: 16, paddingTop: 50 /* <-- 50px top space */ }}>
+    <div style={{ maxWidth: 1120, margin: '0 auto', padding: 16, paddingTop: 50 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr 1fr', gap: 16 }}>
         {/* LEFT: Terms + last wins */}
         <div style={{ display: 'grid', gap: 16 }}>
-          <div style={card}>
+          <div style={{ ...card, textAlign: 'left' }}>
             <div style={title}>Qoidalar (tanga olish)</div>
             <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
               <li>Onlayn 300.000 so‘m = 10 tanga</li>
@@ -99,7 +111,7 @@ export default function Page() {
             <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Admin bu ro‘yxatni keyin kengaytirishi mumkin.</div>
           </div>
 
-          <div style={card}>
+          <div style={{ ...card, textAlign: 'left' }}>
             <div style={title}>Oxirgi 5 yutuq</div>
             {!wins?.length && <div style={{ color: '#94a3b8', fontSize: 14 }}>Hali yutuqlar ro‘yxati yo‘q.</div>}
             <ul style={{ marginTop: 6, display: 'grid', gap: 6 }}>
@@ -159,9 +171,9 @@ export default function Page() {
           )}
         </div>
 
-        {/* RIGHT: users list + STORE (moved here, fixed width) */}
+        {/* RIGHT: users + store */}
         <div style={{ display: 'grid', gap: 16 }}>
-          <div style={card}>
+          <div style={{ ...card, textAlign: 'left' }}>
             <div style={title}>Ishtirokchilar balansi</div>
             <ul style={{ marginTop: 6 }}>
               {state?.users?.map((u) => (
@@ -174,29 +186,35 @@ export default function Page() {
             <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 3 soniyada yangilanadi.</div>
           </div>
 
-          <div style={{ ...card, overflow: 'hidden' /* prevents widening */ }}>
-            <details open={true} style={{ width: '100%' }}>
-              <summary style={{ cursor: 'pointer' }}>Barcha sovg‘alar (narxlari bilan) ▼</summary>
-              <div style={{ marginTop: 8, fontSize: 14 }}>
-                {state?.store?.length ? (
-                  <ul style={{ display: 'grid', gap: 6, width: '100%' }}>
-                    {state.store.map((s) => (
-                      <li key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                        {s.imageUrl ? (
-                          <img src={s.imageUrl} width={20} height={20} style={{ borderRadius: 6, flex: '0 0 auto' }} />
-                        ) : (
-                          <span style={{ width: 20, height: 20, borderRadius: 6, background: '#334155', display: 'inline-block' }} />
-                        )}
-                        <span style={{ flex: '1 1 auto' }}>{s.title}</span>
-                        <span style={{ ...badge, flex: '0 0 auto' }}>{s.coinCost} tanga</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div style={{ color: '#94a3b8' }}>Hali do‘konda mahsulot yo‘q.</div>
-                )}
-              </div>
-            </details>
+          <div style={{ ...card, textAlign: 'left' }}>
+            <div style={title}>Do‘kon (sotib olish)</div>
+            {state?.store?.length ? (
+              <ul style={{ display: 'grid', gap: 8 }}>
+                {state.store.map((s) => {
+                  const canBuy = (me?.balance ?? 0) >= s.coinCost && !busy
+                  return (
+                    <li key={s.id} style={{ display: 'grid', gridTemplateColumns: '24px 1fr auto auto', alignItems: 'center', gap: 8 }}>
+                      {s.imageUrl ? (
+                        <img src={s.imageUrl} width={24} height={24} style={{ borderRadius: 6 }} />
+                      ) : (
+                        <span style={{ width: 24, height: 24, borderRadius: 6, background: '#334155', display: 'inline-block' }} />
+                      )}
+                      <span>{s.title}</span>
+                      <span style={{ ...badge }}>{s.coinCost} tanga</span>
+                      <button
+                        style={{ ...btn, opacity: canBuy ? 1 : 0.6 }}
+                        disabled={!canBuy}
+                        onClick={() => buy(s.id, s.title, s.coinCost)}
+                      >
+                        Sotib olish
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <div style={{ color: '#94a3b8' }}>Hali do‘konda mahsulot yo‘q.</div>
+            )}
           </div>
         </div>
       </div>
@@ -204,7 +222,7 @@ export default function Page() {
   )
 }
 
-/* styles */
+/* consistent card/border styles + left alignment everywhere */
 const card: React.CSSProperties = {
   background: '#0b1220',
   border: '1px solid #142035',
