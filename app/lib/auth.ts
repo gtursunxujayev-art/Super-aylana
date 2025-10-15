@@ -1,39 +1,68 @@
 // app/lib/auth.ts
-import { jwtVerify } from 'jose'
-import type { ReadonlyRequestCookies } from 'next/dist/server/web/spec-extension/adapters/request-cookies'
+import { cookies } from 'next/headers';
+import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'dev-secret')
+const COOKIE_NAME = 'sid';
+const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
-// Accept both names so old & new code work.
-const COOKIE_NAMES = ['auth', 'token'] as const
-
-function readCookieFromHeadersLike(h: Headers | ReadonlyRequestCookies): string | null {
-  // Headers (server) or RequestCookies (app router)
-  for (const name of COOKIE_NAMES) {
-    // @ts-expect-error unifying two types at runtime
-    const v = typeof h.get === 'function' ? h.get('cookie') : h.get(name)
-    if (typeof v === 'string') {
-      // Headers path: parse "cookie" header
-      if (v.includes('=')) {
-        const m = v.match(new RegExp(`(?:^|; )${name}=([^;]+)`))
-        if (m) return decodeURIComponent(m[1])
-      } else {
-        // RequestCookies path: h.get(name) already returns value
-        return v
-      }
-    }
-  }
-  return null
+function getSecret(): string {
+  const s = process.env.JWT_SECRET || process.env.NEXT_PUBLIC_JWT_SECRET;
+  if (!s) throw new Error('JWT_SECRET is not set');
+  return s;
 }
 
-export async function getUserIdFromCookie(headersOrCookies?: Headers | ReadonlyRequestCookies) {
+type Payload = { sub: string; role?: 'admin' | 'user' };
+
+export function issueSession(userId: string, isAdmin: boolean) {
+  const token = jwt.sign({ sub: userId, role: isAdmin ? 'admin' : 'user' } as Payload, getSecret(), {
+    algorithm: 'HS256',
+    expiresIn: MAX_AGE,
+  });
+  // httpOnly cookie via headers API
+  cookies().set({
+    name: COOKIE_NAME,
+    value: token,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true,
+    path: '/',
+    maxAge: MAX_AGE,
+  });
+}
+
+export function clearSession() {
+  cookies().set({
+    name: COOKIE_NAME,
+    value: '',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true,
+    path: '/',
+    maxAge: 0,
+  });
+}
+
+export function readSession():
+  | { userId: string; role: 'admin' | 'user' }
+  | null {
+  const c = cookies().get(COOKIE_NAME)?.value;
+  if (!c) return null;
   try {
-    if (!headersOrCookies) return null
-    const token = readCookieFromHeadersLike(headersOrCookies)
-    if (!token) return null
-    const { payload } = await jwtVerify(token, JWT_SECRET)
-    return (payload.sub as string) || null
+    const payload = jwt.verify(c, getSecret()) as Payload;
+    return { userId: payload.sub, role: payload.role ?? 'user' };
   } catch {
-    return null
+    return null;
   }
+}
+
+export function requireSession(): { userId: string; role: 'admin' | 'user' } {
+  const s = readSession();
+  if (!s) throw new Error('UNAUTHORIZED');
+  return s;
+}
+
+export function requireAdminSession(): { userId: string } {
+  const s = readSession();
+  if (!s || s.role !== 'admin') throw new Error('FORBIDDEN');
+  return { userId: s.userId };
 }
