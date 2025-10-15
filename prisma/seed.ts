@@ -1,48 +1,46 @@
+// prisma/seed.ts
 import { PrismaClient } from '@prisma/client'
+
 const prisma = new PrismaClient()
 
-async function ensurePrize(p: { title: string; coinCost: number; showInStore?: boolean; active?: boolean }) {
-  const existing = await prisma.prize.findFirst({
-    where: { title: p.title, coinCost: p.coinCost },
-    select: { id: true },
-  })
-  if (existing) {
-    await prisma.prize.update({
-      where: { id: existing.id },
-      data: {
-        active: p.active ?? true,
-        showInStore: p.showInStore ?? false,
-      },
-    })
-  } else {
-    await prisma.prize.create({
-      data: {
-        title: p.title,
-        coinCost: p.coinCost,
-        showInStore: p.showInStore ?? false,
-        active: p.active ?? true,
-      },
-    })
-  }
-}
-
 async function main() {
-  const base = [
-    { title: 'Qo‘shimcha aylantirish', coinCost: 50,  showInStore: false },
-    { title: '75 tanga',               coinCost: 50,  showInStore: false },
-    { title: '150 tanga',              coinCost: 100, showInStore: false },
-    { title: '300 tanga',              coinCost: 200, showInStore: false },
-  ]
-  for (const p of base) await ensurePrize(p)
-
-  // Ensure global SpinState row exists
+  // Ensure a single global SpinState row exists with all required fields
   await prisma.spinState.upsert({
     where: { id: 'global' },
     update: {},
-    create: { id: 'global', status: 'IDLE' },
+    create: {
+      id: 'global',
+      status: 'IDLE',
+      // required (strings)
+      userName: '',
+      resultTitle: '',
+      // optional (nullable) — align with your schema where these are now ?
+      spinStartAt: null,
+      durationMs: null,
+      tier: null,
+      // optional pointer to the user currently spinning
+      byUserId: null,
+    },
   })
+
+  // (Optional) seed basics you need later — keep commented unless you want base data
+  // await prisma.prize.createMany({
+  //   data: [
+  //     { title: 'Namuna 50', coinCost: 50, active: true, showInStore: true },
+  //     { title: 'Namuna 100', coinCost: 100, active: true, showInStore: true },
+  //     { title: 'Namuna 200', coinCost: 200, active: true, showInStore: true },
+  //     { title: 'Namuna 500', coinCost: 500, active: true, showInStore: true },
+  //   ],
+  //   skipDuplicates: true,
+  // })
 }
 
 main()
-  .catch((e) => { console.error(e); process.exit(1) })
-  .finally(async () => { await prisma.$disconnect() })
+  .then(async () => {
+    await prisma.$disconnect()
+  })
+  .catch(async (e) => {
+    console.error(e)
+    await prisma.$disconnect()
+    process.exit(1)
+  })
