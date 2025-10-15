@@ -1,4 +1,13 @@
 {
+  "name": "super-aylana",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && prisma db push && next build",
+    "start": "next start",
+    "postinstall": "prisma generate"
+  },
   "dependencies": {
     "@prisma/client": "5.22.0",
     "bcryptjs": "^2.4.3",
@@ -10,11 +19,5 @@
   "devDependencies": {
     "prisma": "5.22.0",
     "typescript": "^5.4.0"
-  },
-  "scripts": {
-    "build": "prisma generate && prisma db push && next build",
-    "dev": "next dev",
-    "postinstall": "prisma generate",
-    "start": "next start"
   }
 }
