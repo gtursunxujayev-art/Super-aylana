@@ -1,91 +1,89 @@
+// components/Wheel.tsx
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import React from 'react'
 
-export type WheelSlice = { label: string }
-
-export default function Wheel({
-  slices,
-  spinning,
-  durationMs = 4200,
-}: {
-  slices: WheelSlice[]
+type Slice = { label: string }
+type Props = {
+  size?: number
+  labels: string[]
   spinning: boolean
-  durationMs?: number
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [angle, setAngle] = useState(0)
+  angle: number
+}
 
-  // spin animation
-  useEffect(() => {
-    if (!spinning) return
-    const start = performance.now()
-    let raf = 0
-    const tick = (t: number) => {
-      const p = Math.min(1, (t - start) / durationMs)
-      const speed = (1 - p) * 22
-      setAngle((a) => a + speed)
-      if (p < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [spinning, durationMs])
-
-  // draw wheel
-  useEffect(() => {
-    const c = canvasRef.current
-    if (!c) return
-    const ctx = c.getContext('2d')!
-    const W = (c.width = 360)
-    const H = (c.height = 360)
-    const r = W / 2 - 6
-    ctx.clearRect(0, 0, W, H)
-    ctx.save()
-    ctx.translate(W / 2, H / 2)
-    ctx.rotate((angle * Math.PI) / 180)
-    const n = slices.length || 12
-
-    for (let i = 0; i < n; i++) {
-      const a0 = (i / n) * Math.PI * 2
-      const a1 = ((i + 1) / n) * Math.PI * 2
-      ctx.beginPath()
-      ctx.moveTo(0, 0)
-      ctx.arc(0, 0, r, a0, a1)
-      ctx.closePath()
-      ctx.fillStyle = i % 2 ? '#18202d' : '#0f172a'
-      ctx.fill()
-      ctx.strokeStyle = '#0b1220'
-      ctx.stroke()
-
-      // label
-      ctx.save()
-      ctx.rotate((a0 + a1) / 2)
-      ctx.translate(r * 0.68, 0)
-      ctx.rotate(Math.PI / 2)
-      ctx.fillStyle = '#e5e7eb'
-      ctx.font = '12px ui-sans-serif, system-ui'
-      ctx.textAlign = 'center'
-      ctx.fillText(slices[i]?.label ?? '', 0, 0, 130)
-      ctx.restore()
-    }
-
-    ctx.restore()
-
-    // pointer
-    ctx.beginPath()
-    ctx.moveTo(W / 2, 8)
-    ctx.lineTo(W / 2 - 10, 30)
-    ctx.lineTo(W / 2 + 10, 30)
-    ctx.closePath()
-    ctx.fillStyle = '#ef4444'
-    ctx.fill()
-  }, [slices, angle])
+export default function Wheel({ size = 320, labels, spinning, angle }: Props) {
+  const radius = size / 2
+  const N = Math.max(1, labels.length)
+  const step = (2 * Math.PI) / N
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={360}
-      height={360}
-      style={{ display: 'block', margin: '0 auto' }}
-    />
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        position: 'relative',
+        margin: '0 auto',
+        transform: `rotate(${angle}deg)`,
+        transition: spinning ? 'transform 3.2s cubic-bezier(.15,.8,.2,1)' : 'none',
+        boxShadow: '0 0 0 6px #0b1220, 0 10px 30px rgba(0,0,0,.5)',
+        background: '#ffffff',
+        overflow: 'hidden',
+      }}
+      aria-label="Aylana"
+    >
+      {/* pointer */}
+      <div
+        style={{
+          position: 'absolute',
+          top: -6,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: 0, height: 0,
+          borderLeft: '12px solid transparent',
+          borderRight: '12px solid transparent',
+          borderBottom: '18px solid #ef4444',
+          zIndex: 10,
+        }}
+      />
+      {/* slices */}
+      {labels.map((label, i) => {
+        const a0 = i * step
+        const a1 = a0 + step
+        const x0 = radius + radius * Math.cos(a0)
+        const y0 = radius + radius * Math.sin(a0)
+        const x1 = radius + radius * Math.cos(a1)
+        const y1 = radius + radius * Math.sin(a1)
+        // alternate light greys for readability on white
+        const bg = i % 2 ? '#f3f4f6' : '#e5e7eb'
+        return (
+          <div key={i} style={{ position: 'absolute', inset: 0 }}>
+            <svg width={size} height={size} style={{ position: 'absolute', inset: 0 }}>
+              <path
+                d={`M ${radius} ${radius} L ${x0} ${y0} A ${radius} ${radius} 0 0 1 ${x1} ${y1} Z`}
+                fill={bg}
+                stroke="#d1d5db"
+                strokeWidth={1}
+              />
+            </svg>
+            {/* label */}
+            <div
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: '50%',
+                transformOrigin: '0 0',
+                transform: `rotate(${(a0 + a1) / 2}rad) translate(${radius * 0.58}px, -8px) rotate(90deg)`,
+                whiteSpace: 'nowrap',
+                fontSize: 14,
+                color: '#111827',
+                fontWeight: 600,
+              }}
+            >
+              {label}
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
