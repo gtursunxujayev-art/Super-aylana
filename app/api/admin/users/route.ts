@@ -1,8 +1,9 @@
+// app/api/admin/users/route.ts
 import { NextResponse } from 'next/server'
 import { prisma } from '@/app/lib/prisma'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
-import { requireAdmin } from '../../requireAdmin'
+import { requireAdmin } from '@/app/api/requireAdmin'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -45,7 +46,6 @@ export async function POST(req: Request) {
     const temp = Math.random().toString(36).slice(-10)
     const hash = await bcrypt.hash(temp, 10)
     await prisma.user.update({ where: { id: body.userId }, data: { passwordHash: hash } })
-    // Return the temp password ONCE so admin can share it
     return NextResponse.json({ ok: true, tempPassword: temp })
   }
 
