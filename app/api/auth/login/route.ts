@@ -1,47 +1,32 @@
-import { NextResponse } from 'next/server'
-import { prisma } from '@/app/lib/prisma'
-import bcrypt from 'bcryptjs'
-import { SignJWT } from 'jose'
-
-const COOKIE = 'auth'
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'dev-secret')
+import { NextResponse } from 'next/server';
+import { prisma } from '@/app/lib/prisma';
+import bcrypt from 'bcryptjs';
+import { issueSession } from '@/app/lib/auth';
 
 export async function POST(req: Request) {
-  const { username, password } = await req.json()
+  try {
+    const { username, password } = await req.json();
 
-  if (!username || !password) {
-    return NextResponse.json({ ok: false, error: 'EMPTY' }, { status: 400 })
+    if (!username || !password) {
+      return NextResponse.json({ ok: false, error: 'REQUIRED' }, { status: 400 });
+    }
+
+    // Use findFirst to avoid the strict composite unique Prisma type you saw in logs
+    const user = await prisma.user.findFirst({ where: { username } });
+
+    if (!user || !user.passwordHash) {
+      return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 });
+    }
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) {
+      return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 });
+    }
+
+    issueSession(user.id, !!(user as any).isAdmin);
+
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: 'SERVER' }, { status: 500 });
   }
-
-  // username is NOT unique in your schema -> use findFirst
-  const user = await prisma.user.findFirst({
-    where: { username },
-    select: { id: true, passwordHash: true },
-  })
-
-  if (!user || !user.passwordHash) {
-    return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 })
-  }
-
-  const ok = await bcrypt.compare(password, user.passwordHash)
-  if (!ok) {
-    return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 })
-  }
-
-  const token = await new SignJWT({})
-    .setProtectedHeader({ alg: 'HS256' })
-    .setSubject(user.id)
-    .setIssuedAt()
-    .setExpirationTime('30d')
-    .sign(JWT_SECRET)
-
-  const res = NextResponse.json({ ok: true })
-  res.cookies.set(COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 60 * 60 * 24 * 30,
-  })
-  return res
 }
