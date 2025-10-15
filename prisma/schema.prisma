@@ -9,18 +9,18 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  tgId         String?  @unique
-  username     String   @unique
-  passwordHash String?           // for site login (Telegram users get auto-generated)
-  isAdmin      Boolean @default(false)
-  balance      Int      @default(0)
-  visible      Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  tgId          String   @unique
+  username      String   @unique        // <- ensure this line is present
+  passwordHash  String?
+  balance       Int      @default(0)
+  isAdmin       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  wins         Win[]
-  events       BalanceEvent[]
-  spins        Spin[]
+  // relations...
+  wins   Win[]
+  spins  Spin[]
 }
 
 model Prize {
