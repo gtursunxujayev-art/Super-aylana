@@ -1,19 +1,32 @@
 :root { color-scheme: dark; }
 html, body { margin:0; padding:0; background:#0a0f1a; color:#e5e7eb; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
 
-/* Desktop: 3 columns with 20px gap */
-.layout {
-  display: grid;
-  grid-template-columns: minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr);
-  gap: 20px; /* 20px everywhere */
+/* Fixed desktop grid: 320px | fluid | 360px  */
+.desktop-grid{
+  display:grid;
+  grid-template-columns: 320px minmax(0,1fr) 360px;
+  column-gap:20px;
+  align-items:start;
+}
+.left-col{
+  display:grid;
+  gap:20px;
+  min-width:0;
+}
+.center-col{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  min-width:0;
+}
+.right-col{
+  display:grid;
+  gap:20px;
+  min-width:0;
 }
 
-@media (max-width: 900px) {
-  .layout { display: flex; flex-direction: column; gap: 20px; } /* 20px on mobile too */
-  .section { width: 100%; }
-  .section-center { order: 1; }
-  .section-users  { order: 2; }
-  .section-wins   { order: 3; }
-  .section-terms  { order: 4; }
-  .section-store  { order: 5; }
+/* Mobile: stack with sensible order */
+@media (max-width: 900px){
+  .desktop-grid{ display:flex; flex-direction:column; gap:20px; }
+  .left-col, .center-col, .right-col{ width:100%; }
 }
