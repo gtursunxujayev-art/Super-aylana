@@ -9,74 +9,73 @@ datasource db {
 }
 
 model User {
-  id             String          @id @default(uuid())
-  username       String          @unique
-  passwordHash   String?
-  balance        Int             @default(0)
-  isAdmin        Boolean         @default(false)
-  tgId           String          @default("")        // was required with NULLs → give default
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String?
+  balance      Int      @default(0)
+  tgId         String   @default("")             // required in app, but default avoids NULL conflicts
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
 
   // relations
-  wins           Win[]
-  spins          Spin[]
-  balanceEvents  BalanceEvent[]
+  wins          Win[]
+  spins         Spin[]
+  balanceEvents BalanceEvent[]
 }
 
 model Prize {
-  id          String   @id @default(uuid())
+  id          String   @id @default(cuid())
   title       String
   coinCost    Int
   imageUrl    String?
   active      Boolean  @default(true)
   showInStore Boolean  @default(true)
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
 
-  @@unique([title, coinCost])
-  wins        Win[]
-}
-
-model Spin {
-  id        String   @id @default(uuid())
-  userId    String
-  tier      Int
-  createdAt DateTime @default(now())
-
-  user      User     @relation(fields: [userId], references: [id])
+  // relations
+  wins Win[]
 }
 
 model Win {
-  id         String   @id @default(uuid())
-  userId     String
-  prizeId    String?                              // OPTIONAL ← fixes earlier schema complaint
-  title      String                               // what was won (text label)
-  coinDelta  Int      @default(0)                 // +coins or -coins
-  tier       Int      @default(50)                // 50 | 100 | 200
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String
+  prizeId   String?                    // a win may be coin-only; keep optional
+  title     String   @default("")      // text shown as result
+  tier      Int      @default(50)      // 50 | 100 | 200
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
-  user       User     @relation(fields: [userId], references: [id])
-  prize      Prize?   @relation(fields: [prizeId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+  prize Prize? @relation(fields: [prizeId], references: [id])
 }
 
-model SpinState {
-  id          String   @id                        // use 'global'
-  status      String                               // 'IDLE' | 'SPINNING'
-  spinStartAt DateTime @default(now())             // give a safe default
-  durationMs  Int      @default(0)                 // safe default
-  tier        Int      @default(50)                // safe default
-  userName    String   @default("")                // last spinner name (optional)
-  resultTitle String   @default("")                // last result label (optional)
-  updatedAt   DateTime @updatedAt
+model Spin {
+  id        String   @id @default(cuid())
+  userId    String
+  tier      Int      @default(50)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
 }
 
 model BalanceEvent {
-  id        String   @id @default(uuid())
+  id        String   @id @default(cuid())
   userId    String
-  delta     Int
-  reason    String?
+  amount    Int
+  reason    String?               // e.g. "spin", "admin_adjustment"
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+}
+
+model SpinState {
+  id          String   @id @default("global")
+  status      String   @default("IDLE")
+  spinStartAt DateTime @default(now())
+  durationMs  Int      @default(0)
+  tier        Int      @default(50)
+  userName    String   @default("")      // who is spinning (display only)
+  resultTitle String   @default("")      // text of last/active result
+  updatedAt   DateTime @default(now()) @updatedAt
 }
