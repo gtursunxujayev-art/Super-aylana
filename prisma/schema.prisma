@@ -32,6 +32,9 @@ model Prize {
   createdAt   DateTime @default(now())
 
   wins        Win[]
+
+  // <-- Add composite unique so upsert(where: { title_coinCost: { ... } }) compiles
+  @@unique([title, coinCost], name: "title_coinCost")
 }
 
 model Win {
@@ -85,5 +88,5 @@ model SpinState {
   tier        Int?
   userName    String?
   resultTitle String?
-  updatedAt   DateTime @updatedAt   // <- keep this so Prisma doesn't drop it
+  updatedAt   DateTime @updatedAt   // keep to avoid data-loss warning
 }
