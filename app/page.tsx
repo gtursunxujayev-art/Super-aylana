@@ -27,37 +27,37 @@ export default function Page() {
   const [tier, setTier] = useState<50 | 100 | 200>(50)
   const [spinning, setSpinning] = useState(false)
 
-  // real labels for the wheel
   const { data: wheelData, mutate: refWheel } = useSWR<{ ok: boolean; labels: string[] }>(
-    `/api/wheel?tier=${tier}`,
-    (u) => api(u),
-    { refreshInterval: 0 }
+    `/api/wheel?tier=${tier}`, (u) => api(u), { refreshInterval: 0 }
   )
 
-  // Bootstrap user (Telegram WebApp preferred)
+  // Telegram-first bootstrap (no demo grant UI anymore)
   useEffect(() => {
     ;(async () => {
       try {
         const w = window as any
         const tg = w?.Telegram?.WebApp
-        if (tg?.initData) {
-          await post('/api/bootstrap', { initData: tg.initData })
+        if (tg?.ready) tg.ready()
+        if (tg?.expand) try { tg.expand() } catch {}
+        if (tg?.initData && tg.initData.length > 0) {
+          const r = await post('/api/bootstrap', { initData: tg.initData })
+          // success → refresh identity-bound data
+          await Promise.all([refState(), refMe(), refWheel()])
         } else {
-          // Demo fallback
+          // If not opened inside Telegram, allow dev fallback once
           const id = localStorage.getItem('demoUid') || String(Math.floor(Math.random() * 1e12))
           localStorage.setItem('demoUid', id)
           const name = localStorage.getItem('demoName') || `Guest${String(id).slice(-4)}`
           localStorage.setItem('demoName', name)
           await post('/api/bootstrap', { tgId: id, username: name })
+          await Promise.all([refState(), refMe(), refWheel()])
         }
-        await Promise.all([refState(), refMe(), refWheel()])
-      } catch {}
+      } catch {
+        // ignore; UI still loads
+      }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  const allowGrant = process.env.NEXT_PUBLIC_ALLOW_SELF_GRANT === 'true'
-  async function grant(n = 50) { try { await post('/api/dev/grant', { coins: n }); await Promise.all([refMe(), refState()]) } catch {} }
 
   const slices = useMemo(() => (wheelData?.labels ?? []).map(label => ({ label })), [wheelData])
 
@@ -95,10 +95,9 @@ export default function Page() {
 
   return (
     <div style={{ maxWidth: 1120, margin: '0 auto', padding: 16, paddingTop: 50 }}>
-      {/* Desktop: 3-column grid; Mobile: stacked with custom order */}
       <div className="layout">
-        {/* CENTER (Wheel + controls) — shown first on mobile */}
-        <section className="section section-center">
+        {/* CENTER */}
+        <section className="section section-center" style={{ display: 'grid', gap: 20 }}>
           <div>
             {[50, 100, 200].map((v) => (
               <button
@@ -129,23 +128,9 @@ export default function Page() {
               Spin (-{tier})
             </button>
           </div>
-
-          {allowGrant && (
-            <div style={card}>
-              <div style={title}>Demo: Coins</div>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                <button style={btn} onClick={() => grant(50)}>+50</button>
-                <button style={btn} onClick={() => grant(100)}>+100</button>
-                <button style={btn} onClick={() => grant(200)}>+200</button>
-              </div>
-              <div style={{ color: '#64748b', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
-                Panel faqat <code>NEXT_PUBLIC_ALLOW_SELF_GRANT=true</code> bo‘lganda ko‘rinadi.
-              </div>
-            </div>
-          )}
         </section>
 
-        {/* USERS — second on mobile */}
+        {/* USERS */}
         <section className="section section-users" style={{ ...card, textAlign: 'left' }}>
           <div style={title}>Ishtirokchilar balansi</div>
           <ul style={{ marginTop: 6 }}>
@@ -159,7 +144,7 @@ export default function Page() {
           <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 3 soniyada yangilanadi.</div>
         </section>
 
-        {/* LAST WINS — third on mobile */}
+        {/* WINS */}
         <section className="section section-wins" style={{ ...card, textAlign: 'left' }}>
           <div style={title}>Oxirgi 5 yutuq</div>
           {!wins?.length && <div style={{ color: '#94a3b8', fontSize: 14 }}>Hali yutuqlar ro‘yxati yo‘q.</div>}
@@ -173,7 +158,7 @@ export default function Page() {
           <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 4 soniyada yangilanadi.</div>
         </section>
 
-        {/* TERMS — fourth on mobile */}
+        {/* TERMS */}
         <section className="section section-terms" style={{ ...card, textAlign: 'left' }}>
           <div style={title}>Qoidalar (tanga olish)</div>
           <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
@@ -183,7 +168,7 @@ export default function Page() {
           <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Admin bu ro‘yxatni keyin kengaytirishi mumkin.</div>
         </section>
 
-        {/* STORE — last on mobile */}
+        {/* STORE */}
         <section className="section section-store" style={{ ...card, textAlign: 'left', overflow: 'hidden' }}>
           <div style={title}>Do‘kon (sotib olish)</div>
           {state?.store?.length ? (
