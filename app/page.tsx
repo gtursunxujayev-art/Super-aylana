@@ -19,9 +19,23 @@ async function api<T>(url: string, init?: RequestInit) {
 const post = <T,>(url: string, body: any) => api<T>(url, { method: 'POST', body: JSON.stringify(body) })
 
 export default function Page() {
-  const { data: state } = useSWR<StateRes>('/api/state', (u) => api<StateRes>(u), { refreshInterval: 3000 })
-  const { data: wins } = useSWR<any[]>('/api/wins?take=5', (u) => api<any[]>(u), { refreshInterval: 4000 })
-  const { data: meRes, mutate: refMe } = useSWR<MeRes>('/api/me', (u) => api<MeRes>(u))
+  const { data: state } = useSWR<StateRes>(
+    '/api/state',
+    (u: string) => api<StateRes>(u),
+    { refreshInterval: 3000 }
+  )
+
+  const { data: wins } = useSWR<any[]>(
+    '/api/wins?take=5',
+    (u: string) => api<any[]>(u),
+    { refreshInterval: 4000 }
+  )
+
+  const { data: meRes, mutate: refMe } = useSWR<MeRes>(
+    '/api/me',
+    (u: string) => api<MeRes>(u),
+    { refreshInterval: 0 }
+  )
   const me = meRes?.me
 
   const [tier, setTier] = useState<50 | 100 | 200>(50)
@@ -30,7 +44,9 @@ export default function Page() {
   const [tgInfo, setTgInfo] = useState<{ temp?: string } | null>(null)
 
   const { data: wheelData } = useSWR<{ ok: boolean; labels: string[] }>(
-    `/api/wheel?tier=${tier}`, (u) => api(u)
+    `/api/wheel?tier=${tier}`,
+    (u: string) => api<{ ok: boolean; labels: string[] }>(u),
+    { refreshInterval: 0 }
   )
 
   // Telegram-only auto login. No guest fallback.
