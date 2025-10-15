@@ -1,3 +1,4 @@
+// Prisma + Neon (PostgreSQL)
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,73 +9,80 @@ datasource db {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  tgId          String         @unique
-  username      String
-  createdAt     DateTime       @default(now())
-  balance       Int            @default(0)
-  visible       Boolean        @default(true)
+  id           String   @id @default(cuid())
+  tgId         String?  @unique
+  username     String
+  passwordHash String?           // for site login (Telegram users get auto-generated)
+  balance      Int      @default(0)
+  visible      Boolean  @default(true)
+  createdAt    DateTime @default(now())
 
-  spins         Spin[]
-  wins          Win[]
-  balanceEvents BalanceEvent[]
+  wins         Win[]
+  events       BalanceEvent[]
+  spins        Spin[]
 }
 
 model Prize {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   title       String
   coinCost    Int
   imageUrl    String?
-  active      Boolean @default(true)
-  showInStore Boolean @default(false)
+  active      Boolean  @default(true)
+  showInStore Boolean  @default(true)
   createdAt   DateTime @default(now())
 
-  // 🔁 back-relation to Win (this was missing)
   wins        Win[]
-
-  @@unique([title, coinCost], name: "title_coinCost")
-}
-
-model Spin {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id])
-  tier       Int
-  startedAt  DateTime @default(now())
-  durationMs Int
-  result     String?
-  completed  Boolean  @default(false)
 }
 
 model Win {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
-
   prizeId   String?
-  prize     Prize?   @relation(fields: [prizeId], references: [id]) // opposite = Prize.wins
-
+  prize     Prize?   @relation(fields: [prizeId], references: [id])
   title     String
   imageUrl  String?
   createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model BalanceEvent {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
   delta     Int
   reason    String
   createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Spin {
+  id         String   @id @default(cuid())
+  userId     String
+  tier       Int
+  durationMs Int
+  result     String
+  completed  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model SpinState {
-  id          String   @id // always 'global'
-  status      String   // 'IDLE' | 'SPINNING'
+  id          String  @id
+  status      String  // 'IDLE' | 'SPINNING'
   spinStartAt DateTime?
   durationMs  Int?
   tier        Int?
   userName    String?
   resultTitle String?
-  updatedAt   DateTime @updatedAt
 }
