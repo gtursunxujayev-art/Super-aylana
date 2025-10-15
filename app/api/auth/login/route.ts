@@ -1,31 +1,43 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '../../../lib/prisma'
-import { z } from 'zod'
+import { prisma } from '@/app/lib/prisma'
 import bcrypt from 'bcryptjs'
-import { issueSid } from '../../../lib/auth'
+import { SignJWT } from 'jose'
 
-export const dynamic = 'force-dynamic'
-export const runtime = 'nodejs'
-
-const Body = z.object({
-  username: z.string().min(3).max(64),
-  password: z.string().min(6).max(128),
-})
+const COOKIE_NAME = 'auth'
+const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'dev-secret')
+const COOKIE_BASE = {
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  secure: process.env.NODE_ENV === 'production',
+  path: '/',
+  maxAge: 60 * 60 * 24 * 30, // 30d
+}
 
 export async function POST(req: Request) {
-  const { username, password } = Body.parse(await req.json())
+  const { username, password } = await req.json()
 
-  const user = await prisma.user.findFirst({
-    where: { username: { equals: username, mode: 'insensitive' } },
-    select: { id: true, username: true, passwordHash: true },
-  })
-  if (!user || !user.passwordHash) return NextResponse.json({ ok: false, error: 'INVALID_CREDENTIALS' }, { status: 401 })
+  if (!username || !password) {
+    return NextResponse.json({ ok: false, error: 'EMPTY' }, { status: 400 })
+  }
+
+  const user = await prisma.user.findUnique({ where: { username } })
+  if (!user || !user.passwordHash) {
+    return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 })
+  }
 
   const ok = await bcrypt.compare(password, user.passwordHash)
-  if (!ok) return NextResponse.json({ ok: false, error: 'INVALID_CREDENTIALS' }, { status: 401 })
+  if (!ok) {
+    return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 })
+  }
 
-  const sid = await issueSid(user.id)
-  const res = NextResponse.json({ ok: true, user: { id: user.id, username: user.username } })
-  res.cookies.set('sid', sid, { httpOnly: true, sameSite: 'lax', maxAge: 60 * 60 * 24 * 30, path: '/' })
+  const token = await new SignJWT({})
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(user.id)
+    .setIssuedAt()
+    .setExpirationTime('30d')
+    .sign(JWT_SECRET)
+
+  const res = NextResponse.json({ ok: true })
+  res.cookies.set(COOKIE_NAME, token, COOKIE_BASE)
   return res
 }
