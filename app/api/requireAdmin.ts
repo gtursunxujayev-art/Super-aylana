@@ -1,18 +1,18 @@
 // app/api/requireAdmin.ts
 import { NextResponse } from 'next/server'
-import { cookies } from 'next/headers'
+import { headers } from 'next/headers'
 import { getUserIdFromCookie } from '@/app/lib/auth'
 import { prisma } from '@/app/lib/prisma'
 
 /**
  * Ensure the current request is from an admin.
- * Admins are determined by the allow-list env ADMIN_USERNAMES
+ * Admins are determined by allow-list env ADMIN_USERNAMES
  * (comma-separated usernames, case sensitive).
  * Example: ADMIN_USERNAMES="admin,Sabina"
  */
 export async function requireAdmin() {
-  // NOTE: getUserIdFromCookie expects cookies()
-  const userId = await getUserIdFromCookie(cookies())
+  // getUserIdFromCookie expects a Headers-like object
+  const userId = await getUserIdFromCookie(headers() as unknown as Headers)
   if (!userId) throw new Error('UNAUTHORIZED')
 
   const me = await prisma.user.findUnique({
@@ -32,7 +32,7 @@ export async function requireAdmin() {
   return me
 }
 
-/** Optional helper that returns a JSON response on failure */
+/** Optional helper returning JSON on failure */
 export async function ensureAdminOrJson() {
   try {
     const me = await requireAdmin()
