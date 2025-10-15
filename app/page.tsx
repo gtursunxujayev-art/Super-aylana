@@ -27,30 +27,30 @@ export default function Page() {
   const [tier, setTier] = useState<50 | 100 | 200>(50)
   const [spinning, setSpinning] = useState(false)
 
-  // real labels for the wheel (no padding)
+  // real labels for the wheel
   const { data: wheelData, mutate: refWheel } = useSWR<{ ok: boolean; labels: string[] }>(
     `/api/wheel?tier=${tier}`,
     (u) => api(u),
     { refreshInterval: 0 }
   )
 
-  // bootstrap user
+  // Bootstrap user (Telegram WebApp preferred)
   useEffect(() => {
     ;(async () => {
       try {
         const w = window as any
         const tg = w?.Telegram?.WebApp
-        if (tg?.initDataUnsafe?.user) {
-          const u = tg.initDataUnsafe.user
-          await post('/api/bootstrap', { tgId: String(u.id), username: u.username || `${u.first_name || 'User'} ${u.last_name || ''}`.trim() })
+        if (tg?.initData) {
+          await post('/api/bootstrap', { initData: tg.initData })
         } else {
+          // Demo fallback
           const id = localStorage.getItem('demoUid') || String(Math.floor(Math.random() * 1e12))
           localStorage.setItem('demoUid', id)
           const name = localStorage.getItem('demoName') || `Guest${String(id).slice(-4)}`
           localStorage.setItem('demoName', name)
           await post('/api/bootstrap', { tgId: id, username: name })
         }
-        refState(); refMe(); refWheel()
+        await Promise.all([refState(), refMe(), refWheel()])
       } catch {}
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,35 +95,10 @@ export default function Page() {
 
   return (
     <div style={{ maxWidth: 1120, margin: '0 auto', padding: 16, paddingTop: 50 }}>
-      {/* minmax(0, …) prevents “widening” when inner content is long */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr)', gap: 16 }}>
-        {/* LEFT: Terms + last wins */}
-        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
-          <div style={{ ...card, textAlign: 'left' }}>
-            <div style={title}>Qoidalar (tanga olish)</div>
-            <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
-              <li>Onlayn 300.000 so‘m = 10 tanga</li>
-              <li>Oflayn 1.000.000 so‘m = 10 tanga</li>
-            </ul>
-            <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Admin bu ro‘yxatni keyin kengaytirishi mumkin.</div>
-          </div>
-
-          <div style={{ ...card, textAlign: 'left' }}>
-            <div style={title}>Oxirgi 5 yutuq</div>
-            {!wins?.length && <div style={{ color: '#94a3b8', fontSize: 14 }}>Hali yutuqlar ro‘yxati yo‘q.</div>}
-            <ul style={{ marginTop: 6, display: 'grid', gap: 6 }}>
-              {wins?.map((w, i) => (
-                <li key={i} style={{ fontSize: 14 }}>
-                  <span style={badge}>{w.user}</span> {w.title}
-                </li>
-              ))}
-            </ul>
-            <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 4 soniyada yangilanadi.</div>
-          </div>
-        </div>
-
-        {/* CENTER: Wheel + controls */}
-        <div style={{ textAlign: 'center', display: 'grid', gap: 12, minWidth: 0 }}>
+      {/* Desktop: 3-column grid; Mobile: stacked with custom order */}
+      <div className="layout">
+        {/* CENTER (Wheel + controls) — shown first on mobile */}
+        <section className="section section-center">
           <div>
             {[50, 100, 200].map((v) => (
               <button
@@ -136,22 +111,24 @@ export default function Page() {
               </button>
             ))}
           </div>
-          <div style={{ color: '#cbd5e1', fontSize: 14 }}>
+          <div style={{ color: '#cbd5e1', fontSize: 14, textAlign: 'center' }}>
             {state?.state.status === 'SPINNING' ? 'Keyingi o‘yinchi tayyor!' : 'Aylantirishga tayyormisiz?'}
           </div>
 
           <Wheel slices={slices} spinning={busy} durationMs={4200} />
 
-          <div style={{ fontSize: 14 }}>
+          <div style={{ fontSize: 14, textAlign: 'center' }}>
             <span>Foydalanuvchi:</span>
             <b style={{ marginLeft: 6 }}>{me?.username || '...'}</b>
             <span style={{ marginLeft: 16 }}>Balans:</span>
             <b style={{ marginLeft: 4 }}>{me?.balance ?? '...'}</b>
           </div>
 
-          <button onClick={doSpin} disabled={busy} style={{ ...btn, width: 140, margin: '0 auto' }}>
-            Spin (-{tier})
-          </button>
+          <div style={{ textAlign: 'center' }}>
+            <button onClick={doSpin} disabled={busy} style={{ ...btn, width: 140 }}>
+              Spin (-{tier})
+            </button>
+          </div>
 
           {allowGrant && (
             <div style={card}>
@@ -161,76 +138,99 @@ export default function Page() {
                 <button style={btn} onClick={() => grant(100)}>+100</button>
                 <button style={btn} onClick={() => grant(200)}>+200</button>
               </div>
-              <div style={{ color: '#64748b', fontSize: 12, marginTop: 6 }}>
+              <div style={{ color: '#64748b', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
                 Panel faqat <code>NEXT_PUBLIC_ALLOW_SELF_GRANT=true</code> bo‘lganda ko‘rinadi.
               </div>
             </div>
           )}
-        </div>
+        </section>
 
-        {/* RIGHT: users + store */}
-        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
-          <div style={{ ...card, textAlign: 'left' }}>
-            <div style={title}>Ishtirokchilar balansi</div>
-            <ul style={{ marginTop: 6 }}>
-              {state?.users?.map((u) => (
-                <li key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14, borderBottom: '1px solid #0f172a' }}>
-                  <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{u.username}</span>
-                  <b>{u.balance}</b>
-                </li>
-              ))}
-            </ul>
-            <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 3 soniyada yangilanadi.</div>
-          </div>
+        {/* USERS — second on mobile */}
+        <section className="section section-users" style={{ ...card, textAlign: 'left' }}>
+          <div style={title}>Ishtirokchilar balansi</div>
+          <ul style={{ marginTop: 6 }}>
+            {state?.users?.map((u) => (
+              <li key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14, borderBottom: '1px solid #0f172a' }}>
+                <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{u.username}</span>
+                <b>{u.balance}</b>
+              </li>
+            ))}
+          </ul>
+          <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 3 soniyada yangilanadi.</div>
+        </section>
 
-          <div style={{ ...card, textAlign: 'left', overflow: 'hidden' }}>
-            <div style={title}>Do‘kon (sotib olish)</div>
-            {state?.store?.length ? (
-              <ul style={{ display: 'grid', gap: 8 }}>
-                {state.store.map((s) => {
-                  const canBuy = (me?.balance ?? 0) >= s.coinCost && !busy
-                  return (
-                    <li
-                      key={s.id}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '24px minmax(0,1fr) auto auto',
-                        alignItems: 'center',
-                        gap: 8,
-                        border: '1px solid #142035',
-                        borderRadius: 10,
-                        padding: '6px 8px'
-                      }}
+        {/* LAST WINS — third on mobile */}
+        <section className="section section-wins" style={{ ...card, textAlign: 'left' }}>
+          <div style={title}>Oxirgi 5 yutuq</div>
+          {!wins?.length && <div style={{ color: '#94a3b8', fontSize: 14 }}>Hali yutuqlar ro‘yxati yo‘q.</div>}
+          <ul style={{ marginTop: 6, display: 'grid', gap: 6 }}>
+            {wins?.map((w, i) => (
+              <li key={i} style={{ fontSize: 14 }}>
+                <span style={badge}>{w.user}</span> {w.title}
+              </li>
+            ))}
+          </ul>
+          <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 4 soniyada yangilanadi.</div>
+        </section>
+
+        {/* TERMS — fourth on mobile */}
+        <section className="section section-terms" style={{ ...card, textAlign: 'left' }}>
+          <div style={title}>Qoidalar (tanga olish)</div>
+          <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
+            <li>Onlayn 300.000 so‘m = 10 tanga</li>
+            <li>Oflayn 1.000.000 so‘m = 10 tanga</li>
+          </ul>
+          <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Admin bu ro‘yxatni keyin kengaytirishi mumkin.</div>
+        </section>
+
+        {/* STORE — last on mobile */}
+        <section className="section section-store" style={{ ...card, textAlign: 'left', overflow: 'hidden' }}>
+          <div style={title}>Do‘kon (sotib olish)</div>
+          {state?.store?.length ? (
+            <ul style={{ display: 'grid', gap: 8 }}>
+              {state.store.map((s) => {
+                const canBuy = (me?.balance ?? 0) >= s.coinCost && !busy
+                return (
+                  <li
+                    key={s.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '24px minmax(0,1fr) auto auto',
+                      alignItems: 'center',
+                      gap: 8,
+                      border: '1px solid #142035',
+                      borderRadius: 10,
+                      padding: '6px 8px'
+                    }}
+                  >
+                    {s.imageUrl ? (
+                      <img src={s.imageUrl} width={24} height={24} style={{ borderRadius: 6 }} />
+                    ) : (
+                      <span style={{ width: 24, height: 24, borderRadius: 6, background: '#334155', display: 'inline-block' }} />
+                    )}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
+                    <span style={{ ...badge }}>{s.coinCost} tanga</span>
+                    <button
+                      style={{ ...btn, width: 110 }}
+                      disabled={!canBuy}
+                      onClick={() => buy(s.id, s.title, s.coinCost)}
                     >
-                      {s.imageUrl ? (
-                        <img src={s.imageUrl} width={24} height={24} style={{ borderRadius: 6 }} />
-                      ) : (
-                        <span style={{ width: 24, height: 24, borderRadius: 6, background: '#334155', display: 'inline-block' }} />
-                      )}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
-                      <span style={{ ...badge }}>{s.coinCost} tanga</span>
-                      <button
-                        style={{ ...btn, width: 110 }}    // fixed width → no widening
-                        disabled={!canBuy}
-                        onClick={() => buy(s.id, s.title, s.coinCost)}
-                      >
-                        Sotib olish
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            ) : (
-              <div style={{ color: '#94a3b8' }}>Hali do‘konda mahsulot yo‘q.</div>
-            )}
-          </div>
-        </div>
+                      Sotib olish
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <div style={{ color: '#94a3b8' }}>Hali do‘konda mahsulot yo‘q.</div>
+          )}
+        </section>
       </div>
     </div>
   )
 }
 
-/* styles */
+/* tokens */
 const card: React.CSSProperties = {
   background: '#0b1220',
   border: '1px solid #142035',
