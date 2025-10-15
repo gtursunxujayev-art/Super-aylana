@@ -3,15 +3,8 @@ import { prisma } from '@/app/lib/prisma'
 import bcrypt from 'bcryptjs'
 import { SignJWT } from 'jose'
 
-const COOKIE_NAME = 'auth'
+const COOKIE = 'auth'
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'dev-secret')
-const COOKIE_BASE = {
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  secure: process.env.NODE_ENV === 'production',
-  path: '/',
-  maxAge: 60 * 60 * 24 * 30,
-}
 
 export async function POST(req: Request) {
   const { username, password } = await req.json()
@@ -20,8 +13,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'INVALID_INPUT' }, { status: 400 })
   }
 
-  const existing = await prisma.user.findUnique({ where: { username } })
-  if (existing) {
+  const exists = await prisma.user.findUnique({ where: { username } })
+  if (exists) {
     return NextResponse.json({ ok: false, error: 'TAKEN' }, { status: 409 })
   }
 
@@ -39,6 +32,12 @@ export async function POST(req: Request) {
     .sign(JWT_SECRET)
 
   const res = NextResponse.json({ ok: true })
-  res.cookies.set(COOKIE_NAME, token, COOKIE_BASE)
+  res.cookies.set(COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 60 * 60 * 24 * 30,
+  })
   return res
 }
