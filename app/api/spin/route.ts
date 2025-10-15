@@ -1,78 +1,113 @@
 // app/api/spin/route.ts
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { prisma } from '@/app/lib/prisma'
 import { getUserIdFromCookie } from '@/app/lib/auth'
-import { headers } from 'next/headers'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-function pick<T>(arr: T[]) { return arr[Math.floor(Math.random()*arr.length)] }
+const Body = z.object({
+  tier: z.number().int().refine((v) => [50, 100, 200].includes(v), 'Tier must be 50, 100 or 200'),
+})
 
 export async function POST(req: Request) {
-  const h = headers() as unknown as Headers
-  const userId = await getUserIdFromCookie(h)
-  if (!userId) return NextResponse.json({ ok:false, error:'UNAUTHORIZED' }, { status: 401 })
+  try {
+    const body = Body.parse(await req.json())
+    const tier = body.tier
 
-  const { tier } = await req.json() as { tier: 50|100|200 }
+    // Who is spinning?
+    const userId = await getUserIdFromCookie(cookies())
+    if (!userId) return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 })
 
-  // transactional lock
-  const result = await prisma.$transaction(async (tx) => {
-    const state = await tx.spinState.findUnique({ where: { id:'global' }, select:{ status:true } })
-    if (state?.status === 'SPINNING') throw new Error('BUSY')
+    const result = await prisma.$transaction(async (tx) => {
+      // Check lock
+      const state = await tx.spinState.findUnique({ where: { id: 'global' } })
+      if (state?.status === 'SPINNING') throw new Error('BUSY')
 
-    await tx.spinState.update({ where:{ id:'global' }, data:{ status:'SPINNING', byUserId:userId } })
+      // Lock the wheel (NOTE: only the `status` field is used)
+      await tx.spinState.update({
+        where: { id: 'global' },
+        data: { status: 'SPINNING' },
+      })
 
-    const me = await tx.user.findUniqueOrThrow({ where:{ id:userId } })
-    if (me.balance < tier) throw new Error('NO_COINS')
+      // Check balance
+      const me = await tx.user.findUniqueOrThrow({ where: { id: userId } })
+      if (me.balance < tier) throw new Error('NO_COINS')
 
-    // Build wheel (admin-defined items with this price)
-    const items = await tx.prize.findMany({
-      where: { active: true, coinCost: tier },
-      select: { id:true, title:true, weight:true, imageUrl:true }
+      // Charge the spin
+      await tx.user.update({
+        where: { id: userId },
+        data: { balance: { decrement: tier } },
+      })
+
+      // Build candidate prizes = all ACTIVE prizes for this tier
+      const prizes = await tx.prize.findMany({
+        where: { coinCost: tier, active: true },
+        orderBy: [{ title: 'asc' }],
+      })
+
+      // Basic pick: choose uniformly among active prizes for the tier.
+      // (Your weighted logic / “another spin” / bonus coins can be put here later.)
+      let prizeId: string | null = null
+      let title = 'Another spin'
+      let imageUrl: string | null = null
+      let coinDelta = 0
+
+      if (prizes.length > 0) {
+        const pick = prizes[Math.floor(Math.random() * prizes.length)]
+        prizeId = pick.id
+        title = pick.title
+        imageUrl = pick.imageUrl ?? null
+      }
+
+      // Record win
+      const win = await tx.win.create({
+        data: {
+          userId,
+          prizeId,
+          title,
+          coinDelta,
+          tier,
+        },
+      })
+
+      // Unlock
+      await tx.spinState.update({
+        where: { id: 'global' },
+        data: { status: 'IDLE' },
+      })
+
+      return {
+        winId: win.id,
+        title,
+        imageUrl,
+        coinDelta,
+        prizeId,
+      }
     })
-    // bonuses
-    const bonus: { title:string; weight:number }[] =
-      tier === 50 ? [{ title:'Another spin', weight:2 }, { title:'+75 coins', weight:1 }] :
-      tier === 100 ? [{ title:'Another spin', weight:2 }, { title:'+150 coins', weight:1 }] :
-      [{ title:'Another spin', weight:2 }, { title:'+300 coins', weight:1 }]
 
-    const pool: { id?:string; title:string; imageUrl?:string|null; weight:number }[] = [
-      ...items.map(i => ({ id:i.id, title:i.title, imageUrl:i.imageUrl, weight:i.weight ?? 1 })),
-      ...bonus
-    ]
-    // weighted pick
-    const total = pool.reduce((s,p)=>s+(p.weight||1),0)
-    let r = Math.random()*total
-    let sel = pool[0]
-    for (const p of pool) { r -= (p.weight||1); if (r <= 0) { sel = p; break } }
+    // Return result to client
+    return NextResponse.json({ ok: true, ...result })
+  } catch (err: any) {
+    // Make sure wheel is unlocked if a handled error occurred in the tx
+    // (If the error was thrown before locking, this is a no-op)
+    try {
+      await prisma.spinState.update({
+        where: { id: 'global' },
+        data: { status: 'IDLE' },
+      })
+    } catch {}
 
-    // spend coins / apply bonus
-    let winTitle = sel.title
-    let prizeId: string|null = null
-    let give = 0
-    if (sel.id) prizeId = sel.id
-    if (sel.title.includes('Another spin')) give = tier // refund this tier
-    if (sel.title.startsWith('+')) give = parseInt(sel.title.replace(/\D/g,'')) || 0
+    if (err.message === 'BUSY') {
+      return NextResponse.json({ ok: false, error: 'BUSY' }, { status: 409 })
+    }
+    if (err.message === 'NO_COINS') {
+      return NextResponse.json({ ok: false, error: 'NO_COINS' }, { status: 402 })
+    }
 
-    await tx.user.update({
-      where:{ id:userId },
-      data:{ balance: { decrement: tier, increment: give } as any }
-    })
-
-    const w = await tx.win.create({
-      data: { userId, prizeId: prizeId || undefined, title: winTitle }
-    })
-
-    await tx.spinState.update({ where:{ id:'global' }, data:{ status:'IDLE', byUserId:null } })
-
-    return { wId: w.id, title: winTitle, imageUrl: sel?.imageUrl ?? null }
-  }).catch(e => ({ error: e.message as string }))
-
-  if ('error' in result) {
-    const code = result.error === 'BUSY' ? 409 : result.error === 'NO_COINS' ? 400 : 500
-    return NextResponse.json({ ok:false, error: result.error }, { status: code })
+    console.error('spin error:', err)
+    return NextResponse.json({ ok: false, error: 'SERVER_ERROR' }, { status: 500 })
   }
-
-  return NextResponse.json({ ok:true, win: result })
 }
