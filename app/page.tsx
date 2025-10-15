@@ -27,7 +27,7 @@ export default function Page() {
   const [tier, setTier] = useState<50 | 100 | 200>(50)
   const [spinning, setSpinning] = useState(false)
 
-  // real labels for the wheel
+  // real labels for the wheel (no padding)
   const { data: wheelData, mutate: refWheel } = useSWR<{ ok: boolean; labels: string[] }>(
     `/api/wheel?tier=${tier}`,
     (u) => api(u),
@@ -59,11 +59,7 @@ export default function Page() {
   const allowGrant = process.env.NEXT_PUBLIC_ALLOW_SELF_GRANT === 'true'
   async function grant(n = 50) { try { await post('/api/dev/grant', { coins: n }); await Promise.all([refMe(), refState()]) } catch {} }
 
-  const slices = useMemo(() => {
-    const labs = wheelData?.labels ?? []
-    const pad = Array.from({ length: Math.max(0, 12 - labs.length) }, () => 'Prize')
-    return [...labs, ...pad].slice(0, 12).map((s) => ({ label: s }))
-  }, [wheelData])
+  const slices = useMemo(() => (wheelData?.labels ?? []).map(label => ({ label })), [wheelData])
 
   async function doSpin() {
     setSpinning(true)
@@ -99,9 +95,10 @@ export default function Page() {
 
   return (
     <div style={{ maxWidth: 1120, margin: '0 auto', padding: 16, paddingTop: 50 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr 1fr', gap: 16 }}>
+      {/* minmax(0, …) prevents “widening” when inner content is long */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr)', gap: 16 }}>
         {/* LEFT: Terms + last wins */}
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
           <div style={{ ...card, textAlign: 'left' }}>
             <div style={title}>Qoidalar (tanga olish)</div>
             <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
@@ -126,7 +123,7 @@ export default function Page() {
         </div>
 
         {/* CENTER: Wheel + controls */}
-        <div style={{ textAlign: 'center', display: 'grid', gap: 12 }}>
+        <div style={{ textAlign: 'center', display: 'grid', gap: 12, minWidth: 0 }}>
           <div>
             {[50, 100, 200].map((v) => (
               <button
@@ -172,13 +169,13 @@ export default function Page() {
         </div>
 
         {/* RIGHT: users + store */}
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
           <div style={{ ...card, textAlign: 'left' }}>
             <div style={title}>Ishtirokchilar balansi</div>
             <ul style={{ marginTop: 6 }}>
               {state?.users?.map((u) => (
                 <li key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14, borderBottom: '1px solid #0f172a' }}>
-                  <span style={{ color: '#cbd5e1' }}>{u.username}</span>
+                  <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{u.username}</span>
                   <b>{u.balance}</b>
                 </li>
               ))}
@@ -186,23 +183,34 @@ export default function Page() {
             <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 3 soniyada yangilanadi.</div>
           </div>
 
-          <div style={{ ...card, textAlign: 'left' }}>
+          <div style={{ ...card, textAlign: 'left', overflow: 'hidden' }}>
             <div style={title}>Do‘kon (sotib olish)</div>
             {state?.store?.length ? (
               <ul style={{ display: 'grid', gap: 8 }}>
                 {state.store.map((s) => {
                   const canBuy = (me?.balance ?? 0) >= s.coinCost && !busy
                   return (
-                    <li key={s.id} style={{ display: 'grid', gridTemplateColumns: '24px 1fr auto auto', alignItems: 'center', gap: 8 }}>
+                    <li
+                      key={s.id}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '24px minmax(0,1fr) auto auto',
+                        alignItems: 'center',
+                        gap: 8,
+                        border: '1px solid #142035',
+                        borderRadius: 10,
+                        padding: '6px 8px'
+                      }}
+                    >
                       {s.imageUrl ? (
                         <img src={s.imageUrl} width={24} height={24} style={{ borderRadius: 6 }} />
                       ) : (
                         <span style={{ width: 24, height: 24, borderRadius: 6, background: '#334155', display: 'inline-block' }} />
                       )}
-                      <span>{s.title}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
                       <span style={{ ...badge }}>{s.coinCost} tanga</span>
                       <button
-                        style={{ ...btn, opacity: canBuy ? 1 : 0.6 }}
+                        style={{ ...btn, width: 110 }}    // fixed width → no widening
                         disabled={!canBuy}
                         onClick={() => buy(s.id, s.title, s.coinCost)}
                       >
@@ -222,14 +230,14 @@ export default function Page() {
   )
 }
 
-/* consistent card/border styles + left alignment everywhere */
+/* styles */
 const card: React.CSSProperties = {
   background: '#0b1220',
   border: '1px solid #142035',
   borderRadius: 12,
   padding: 14,
 }
-const title: React.CSSProperties = { fontWeight: 600, marginBottom: 6 }
+const title: React.CSSProperties = { fontWeight: 600, marginBottom: 6, textAlign: 'left' }
 const btn: React.CSSProperties = {
   background: '#1f2937',
   border: '1px solid #374151',
@@ -244,4 +252,5 @@ const badge: React.CSSProperties = {
   borderRadius: 999,
   fontSize: 12,
   color: '#e5e7eb',
+  whiteSpace: 'nowrap'
 }
