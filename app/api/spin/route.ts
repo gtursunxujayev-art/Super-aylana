@@ -22,7 +22,7 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
 
-    // Current wheel state (stick to existing columns only)
+    // Current wheel state (ONLY existing columns on SpinState)
     spinning: state?.status === 'SPINNING',
     status: state?.status ?? 'IDLE',
     spinStartAt: state?.spinStartAt ?? null,
@@ -31,8 +31,8 @@ export async function GET() {
     userName: state?.userName ?? null,
     resultTitle: state?.resultTitle ?? null,
 
-    // Latest 5 winners for the left column
-    lastWins: last5.map(w => ({
+    // Latest 5 winners (for sidebar)
+    lastWins: last5.map((w) => ({
       id: w.id,
       username: w.user.username,
       title: w.title,
