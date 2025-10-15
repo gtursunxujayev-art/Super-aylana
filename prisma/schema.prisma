@@ -9,73 +9,67 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  username     String   @unique
-  passwordHash String?
-  balance      Int      @default(0)
-  tgId         String   @default("")             // required in app, but default avoids NULL conflicts
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @default(now()) @updatedAt
+  id            String          @id @default(cuid())
+  tgId          String?         @unique
+  username      String?         @unique
+  passwordHash  String?
+  balance       Int             @default(0)
+  isAdmin       Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
-  // relations
   wins          Win[]
-  spins         Spin[]
   balanceEvents BalanceEvent[]
 }
 
 model Prize {
-  id          String   @id @default(cuid())
-  title       String
-  coinCost    Int
-  imageUrl    String?
-  active      Boolean  @default(true)
-  showInStore Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @default(now()) @updatedAt
+  id         String   @id @default(cuid())
+  title      String
+  coinCost   Int
+  imageUrl   String?
+  active     Boolean  @default(true)
+  showInStore Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  // relations
-  wins Win[]
+  wins       Win[]
+
+  @@unique([title, coinCost])
 }
 
 model Win {
   id        String   @id @default(cuid())
   userId    String
-  prizeId   String?                    // a win may be coin-only; keep optional
-  title     String   @default("")      // text shown as result
-  tier      Int      @default(50)      // 50 | 100 | 200
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-
-  user  User  @relation(fields: [userId], references: [id])
-  prize Prize? @relation(fields: [prizeId], references: [id])
-}
-
-model Spin {
-  id        String   @id @default(cuid())
-  userId    String
-  tier      Int      @default(50)
+  prizeId   String?
+  title     String
+  tier      Int      @default(0)
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user   User  @relation(fields: [userId], references: [id])
+  prize  Prize @relation(fields: [prizeId], references: [id])
 }
 
 model BalanceEvent {
   id        String   @id @default(cuid())
   userId    String
-  amount    Int
-  reason    String?               // e.g. "spin", "admin_adjustment"
+  delta     Int
+  reason    String?
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 }
 
+/**
+ * Global spin state. We keep defaults so prisma db push can run on existing rows.
+ * Then app code can set these precisely at runtime.
+ */
 model SpinState {
-  id          String   @id @default("global")
+  id          String   @id
   status      String   @default("IDLE")
   spinStartAt DateTime @default(now())
   durationMs  Int      @default(0)
-  tier        Int      @default(50)
-  userName    String   @default("")      // who is spinning (display only)
-  resultTitle String   @default("")      // text of last/active result
-  updatedAt   DateTime @default(now()) @updatedAt
+  tier        Int      @default(0)
+  userName    String   @default("")
+  resultTitle String   @default("")
+  updatedAt   DateTime @updatedAt
 }
