@@ -1,6 +1,5 @@
 // app/api/spin/route.ts
 import { NextResponse } from 'next/server'
-import { cookies } from 'next/headers'
 import { prisma } from '@/app/lib/prisma'
 import { getUserIdFromCookie } from '@/app/lib/auth'
 import { z } from 'zod'
@@ -17,39 +16,40 @@ export async function POST(req: Request) {
     const body = Body.parse(await req.json())
     const tier = body.tier
 
-    // Who is spinning?
-    const userId = await getUserIdFromCookie(cookies())
-    if (!userId) return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 })
+    // Get user from request headers (NOT cookies())
+    const userId = await getUserIdFromCookie(req.headers as Headers)
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 })
+    }
 
     const result = await prisma.$transaction(async (tx) => {
-      // Check lock
+      // Check global lock
       const state = await tx.spinState.findUnique({ where: { id: 'global' } })
       if (state?.status === 'SPINNING') throw new Error('BUSY')
 
-      // Lock the wheel (NOTE: only the `status` field is used)
+      // Lock
       await tx.spinState.update({
         where: { id: 'global' },
         data: { status: 'SPINNING' },
       })
 
-      // Check balance
+      // Balance check
       const me = await tx.user.findUniqueOrThrow({ where: { id: userId } })
       if (me.balance < tier) throw new Error('NO_COINS')
 
-      // Charge the spin
+      // Deduct spin cost
       await tx.user.update({
         where: { id: userId },
         data: { balance: { decrement: tier } },
       })
 
-      // Build candidate prizes = all ACTIVE prizes for this tier
+      // Candidates: active prizes for this tier
       const prizes = await tx.prize.findMany({
         where: { coinCost: tier, active: true },
         orderBy: [{ title: 'asc' }],
       })
 
-      // Basic pick: choose uniformly among active prizes for the tier.
-      // (Your weighted logic / “another spin” / bonus coins can be put here later.)
+      // Simple uniform pick among active items
       let prizeId: string | null = null
       let title = 'Another spin'
       let imageUrl: string | null = null
@@ -88,11 +88,9 @@ export async function POST(req: Request) {
       }
     })
 
-    // Return result to client
     return NextResponse.json({ ok: true, ...result })
   } catch (err: any) {
-    // Make sure wheel is unlocked if a handled error occurred in the tx
-    // (If the error was thrown before locking, this is a no-op)
+    // Best-effort unlock
     try {
       await prisma.spinState.update({
         where: { id: 'global' },
