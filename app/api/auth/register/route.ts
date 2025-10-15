@@ -13,8 +13,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'INVALID_INPUT' }, { status: 400 })
   }
 
-  const exists = await prisma.user.findUnique({ where: { username } })
-  if (exists) {
+  // username not unique -> warn if a same-name user exists
+  const existing = await prisma.user.findFirst({ where: { username }, select: { id: true } })
+  if (existing) {
     return NextResponse.json({ ok: false, error: 'TAKEN' }, { status: 409 })
   }
 
