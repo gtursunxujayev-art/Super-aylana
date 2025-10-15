@@ -32,14 +32,16 @@ export async function GET(req: Request) {
   labels.push('Another spin')
   labels.push(`+${tier === 50 ? 75 : tier === 100 ? 150 : 300} coins`)
 
-  const twoNext = nt.length ? pick2(nt).map(p => p.title) :
-    (nextTier === 500 ? ['500 coin sovg‘a', '500 coin sovg‘a'] : [])
+  if (nt.length) {
+    labels.push(...pick2(nt).map(p => p.title))
+  } else if (nextTier === 500) {
+    // fallback if no 500-tier prizes exist yet
+    labels.push('500 coin sovg‘a', '500 coin sovg‘a')
+  }
 
-  labels.push(...twoNext)
+  // only real admin-added prizes for the current tier
   labels.push(...sameTier.map(p => p.title))
 
-  // pad to 12
-  while (labels.length < 12) labels.push('Prize')
-
-  return NextResponse.json({ ok: true, labels: labels.slice(0, 12) })
+  // NOTE: do NOT pad to 12; wheel will draw exactly as many slices as we have
+  return NextResponse.json({ ok: true, labels })
 }
