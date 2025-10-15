@@ -1,96 +1,84 @@
-// Prisma + Neon (PostgreSQL)
+// ---------- Prisma Client ----------
 generator client {
   provider = "prisma-client-js"
 }
 
+// ---------- Database ----------
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+// ---------- Models ----------
 model User {
-  id            String   @id @default(cuid())
-  tgId          String   @unique
-  username      String   @unique        // <- ensure this line is present
-  passwordHash  String?
-  balance       Int      @default(0)
-  isAdmin       Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String          @id @default(cuid())
+  tgId         String          @unique
+  username     String          @unique
+  passwordHash String?
+  balance      Int             @default(0)
+  isAdmin      Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
-  // relations...
-  wins   Win[]
-  spins  Spin[]
+  // Relations
+  wins           Win[]
+  spins          Spin[]
+  balanceEvents  BalanceEvent[]
 }
 
 model Prize {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   title       String
   coinCost    Int
   imageUrl    String?
-  active      Boolean  @default(true)
-  showInStore Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  active      Boolean @default(true)
+  showInStore Boolean @default(true)
 
-  wins        Win[]
+  // Relations
+  wins Win[]
+
+  @@unique([title, coinCost]) // helps prevent duplicates in the store
 }
 
 model Win {
   id        String   @id @default(cuid())
   userId    String
   prizeId   String?
-  prize     Prize?   @relation(fields: [prizeId], references: [id])
   title     String
-  imageUrl  String?
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id])
+  user   User  @relation(fields: [userId], references: [id])
+  prize  Prize @relation(fields: [prizeId], references: [id])
+}
 
-  @@index([userId])
-  @@index([createdAt])
+model Spin {
+  id        String   @id @default(cuid())
+  userId    String
+  tier      Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model SpinState {
+  /// Single row with id = 'global'
+  id          String   @id
+  status      String   @default("IDLE")
+  spinStartAt DateTime @default(now())
+  durationMs  Int      @default(0)
+  tier        Int      @default(0)
+  userName    String   @default("")
+  resultTitle String   @default("")
+  updatedAt   DateTime @updatedAt
 }
 
 model BalanceEvent {
   id        String   @id @default(cuid())
   userId    String
-  delta     Int
+  delta     Int       // positive or negative
   reason    String
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@index([createdAt])
+  // Relations
+  user User @relation(fields: [userId], references: [id])
 }
-
-model Spin {
-  id         String   @id @default(cuid())
-  userId     String
-  tier       Int
-  durationMs Int
-  result     String
-  completed  Boolean  @default(false)
-  createdAt  DateTime @default(now())
-
-  user       User     @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@index([createdAt])
-}
-
-model SpinState {
-  id          String   @id @default("global")
-  status      String
-  // Make these optional to avoid failing when existing row has NULLs
-  spinStartAt DateTime?
-  durationMs  Int?
-  tier        Int?
-
-  userName    String
-  resultTitle String
-  updatedAt   DateTime @updatedAt
-
-  // who is currently spinning (nullable when idle)
-  byUserId    String?
-}
-
