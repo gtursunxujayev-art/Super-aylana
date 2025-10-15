@@ -1,376 +1,247 @@
-// app/page.tsx
-'use client';
+'use client'
+import useSWR from 'swr'
+import { useEffect, useMemo, useState } from 'react'
+import Wheel from './components/Wheel'
 
-/**
- * Fixed-width main page layout that prevents horizontal widening
- * when lists grow or dropdowns open. This is a full, ready-to-replace
- * page file. Plug your existing widgets/content into the marked slots
- * without changing the layout behavior.
- */
+type StateRes = {
+  state: { status: 'IDLE' | 'SPINNING'; userName?: string | null; tier?: number | null; resultTitle?: string | null }
+  users: { id: string; username: string; balance: number }[]
+  store: { id: string; title: string; coinCost: number; imageUrl?: string | null }[]
+  lastWins: { user: string; title: string; imageUrl?: string | null }[]
+}
+type MeRes = { ok: boolean; me?: { id: string; username: string; balance: number } }
 
-import React from 'react';
+async function api<T>(url: string, init?: RequestInit) {
+  const res = await fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers || {}) } })
+  if (!res.ok) throw new Error(await res.text())
+  return (await res.json()) as T
+}
+const post = <T,>(url: string, body: any) => api<T>(url, { method: 'POST', body: JSON.stringify(body) })
 
 export default function Page() {
+  const { data: state, mutate: refState } = useSWR<StateRes>('/api/state', (u) => api<StateRes>(u), { refreshInterval: 3000 })
+  const { data: wins, mutate: refWins } = useSWR<any[]>('/api/wins?take=5', (u) => api<any[]>(u), { refreshInterval: 4000 })
+  const { data: meRes, mutate: refMe } = useSWR<MeRes>('/api/me', (u) => api<MeRes>(u), { refreshInterval: 4000 })
+  const me = meRes?.me
+
+  const [tier, setTier] = useState<50 | 100 | 200>(50)
+  const [spinning, setSpinning] = useState(false)
+
+  // real labels for the wheel
+  const { data: wheelData, mutate: refWheel } = useSWR<{ ok: boolean; labels: string[] }>(
+    `/api/wheel?tier=${tier}`,
+    (u) => api(u),
+    { refreshInterval: 0 }
+  )
+
+  // bootstrap user
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const w = window as any
+        const tg = w?.Telegram?.WebApp
+        if (tg?.initDataUnsafe?.user) {
+          const u = tg.initDataUnsafe.user
+          await post('/api/bootstrap', { tgId: String(u.id), username: u.username || `${u.first_name || 'User'} ${u.last_name || ''}`.trim() })
+        } else {
+          const id = localStorage.getItem('demoUid') || String(Math.floor(Math.random() * 1e12))
+          localStorage.setItem('demoUid', id)
+          const name = localStorage.getItem('demoName') || `Guest${String(id).slice(-4)}`
+          localStorage.setItem('demoName', name)
+          await post('/api/bootstrap', { tgId: id, username: name })
+        }
+        refState(); refMe(); refWheel()
+      } catch {}
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const allowGrant = process.env.NEXT_PUBLIC_ALLOW_SELF_GRANT === 'true'
+  async function grant(n = 50) { try { await post('/api/dev/grant', { coins: n }); await Promise.all([refMe(), refState()]) } catch {} }
+
+  const slices = useMemo(() => {
+    const labs = wheelData?.labels ?? []
+    const pad = Array.from({ length: Math.max(0, 12 - labs.length) }, () => 'Prize')
+    return [...labs, ...pad].slice(0, 12).map((s) => ({ label: s }))
+  }, [wheelData])
+
+  async function doSpin() {
+    setSpinning(true)
+    try {
+      const res = await post<{ ok: true; durationMs: number; result: { title: string; coinDelta: number } }>('/api/spin', { tier: String(tier) })
+      setTimeout(async () => {
+        await Promise.all([refState(), refWins(), refMe(), refWheel()])
+        setSpinning(false)
+        alert(`"${me?.username || 'Foydalanuvchi'}", siz "${res.result.title}" yutib oldingiz 🎉`)
+      }, res.durationMs)
+    } catch (e: any) {
+      setSpinning(false)
+      const msg = String(e?.message || e)
+      if (msg.includes('BUSY')) alert('Hozir aylanyapti, kuting.')
+      else if (msg.includes('NOT_ENOUGH_COINS')) alert('Tangalar yetarli emas.')
+      else alert('Xatolik.')
+    }
+  }
+
+  async function buy(prizeId: string, title: string, cost: number) {
+    try {
+      const res = await post<{ ok: boolean; title: string; cost: number }>('/api/store/buy', { prizeId })
+      alert(`"${me?.username || 'Foydalanuvchi'}", siz do‘kondan "${res.title}" ni ${cost} tangaga oldingiz 🎉`)
+      await Promise.all([refMe(), refState(), refWins()])
+    } catch (e: any) {
+      const msg = String(e?.message || e)
+      if (msg.includes('NOT_ENOUGH_COINS')) alert('Tangalar yetarli emas.')
+      else alert('Sotib olishda xatolik.')
+    }
+  }
+
+  const busy = state?.state.status === 'SPINNING' || spinning
+
   return (
-    <div className="page">
-      <div className="columns">
-        {/* ========== LEFT PANEL ========== */}
-        <aside className="left panel">
-          <section className="panel box">
-            <h3 className="title">Qoidalar (soddalashtirilgan)</h3>
-            {/* 👉 Place your existing "rules" content here */}
-            <div className="text sm break">
-              <ul className="bullets">
-                <li>Odatiy 10,000 so‘m = 10 tanga</li>
-                <li>Odatiy 100,000 so‘m = 100 tanga</li>
-                <li>Adminlar bu yerga yozib ko‘rsatma qoldirishi mumkin.</li>
-              </ul>
-            </div>
-          </section>
-
-          <section className="panel box" style={{ marginTop: 12 }}>
-            <h3 className="title">Oxirgi 5 yutug‘</h3>
-            {/* 👉 Replace this list with your real "last 5 prizes" */}
-            <div className="scroll">
-              {Array.from({ length: 12 }).map((_, i) => (
-                <div className="row" key={i}>
-                  <span className="label truncate">Guest{i + 1} • Mahsulot {i + 1}</span>
-                  <span className="val">+{(i + 1) * 10}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        </aside>
-
-        {/* ========== CENTER ========== */}
-        <main className="center panel">
-          <div className="center-inner">
-            <h4 className="muted">Aylanaylik tayyormisiz?</h4>
-
-            {/* Wheel area */}
-            <div className="wheel-wrap">
-              {/* 👉 Mount your actual Wheel component inside this box */}
-              <div className="wheel-box">
-                <div className="wheel">WHEEL</div>
-                <div className="pin" />
-              </div>
-            </div>
-
-            {/* User + balance info under wheel */}
-            <div className="info-line">
-              <span className="muted">Foydalanuvchi:</span>
-              <span className="bold ellipsis">Guest1786</span>
-              <span className="dot" />
-              <span className="muted">Balans:</span>
-              <span className="bold">0</span>
-            </div>
-
-            {/* Spin button */}
-            <div className="actions">
-              <button className="btn">Spin (50)</button>
-            </div>
-
-            {/* Demo coins */}
-            <section className="panel box" style={{ marginTop: 16 }}>
-              <div className="row">
-                <span className="title">Demo: Coins</span>
-              </div>
-              <div className="btns">
-                <button className="btn sm">+50</button>
-                <button className="btn sm">+100</button>
-                <button className="btn sm">+200</button>
-              </div>
-              <p className="muted sm" style={{ marginTop: 8 }}>
-                Faqat dev/test: MINT_PUBLIC, ALLOW_SELF_SPINni true bo‘lsa ko‘rinadi.
-              </p>
-            </section>
+    <div style={{ maxWidth: 1120, margin: '0 auto', padding: 16, paddingTop: 50 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr 1fr', gap: 16 }}>
+        {/* LEFT: Terms + last wins */}
+        <div style={{ display: 'grid', gap: 16 }}>
+          <div style={{ ...card, textAlign: 'left' }}>
+            <div style={title}>Qoidalar (tanga olish)</div>
+            <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
+              <li>Onlayn 300.000 so‘m = 10 tanga</li>
+              <li>Oflayn 1.000.000 so‘m = 10 tanga</li>
+            </ul>
+            <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Admin bu ro‘yxatni keyin kengaytirishi mumkin.</div>
           </div>
-        </main>
 
-        {/* ========== RIGHT PANEL ========== */}
-        <aside className="right panel">
-          <section className="panel box">
-            <h3 className="title">Ishtirokchilar balansi</h3>
-            {/* 👉 Replace with your live "users + balances" list */}
-            <div className="scroll">
-              {Array.from({ length: 40 }).map((_, i) => (
-                <div className="row" key={i}>
-                  <span className="label truncate">Guest{i + 1015}</span>
-                  <span className="val">{i % 7 === 0 ? (i + 1) * 10 : 0}</span>
-                </div>
+          <div style={{ ...card, textAlign: 'left' }}>
+            <div style={title}>Oxirgi 5 yutuq</div>
+            {!wins?.length && <div style={{ color: '#94a3b8', fontSize: 14 }}>Hali yutuqlar ro‘yxati yo‘q.</div>}
+            <ul style={{ marginTop: 6, display: 'grid', gap: 6 }}>
+              {wins?.map((w, i) => (
+                <li key={i} style={{ fontSize: 14 }}>
+                  <span style={badge}>{w.user}</span> {w.title}
+                </li>
               ))}
-            </div>
-            <p className="muted xs" style={{ marginTop: 6 }}>
-              Ro‘yxat har 2 soniyada yangilanadi.
-            </p>
-          </section>
+            </ul>
+            <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 4 soniyada yangilanadi.</div>
+          </div>
+        </div>
 
-          <section className="panel box" style={{ marginTop: 12 }}>
-            <h3 className="title">Do‘kon (coin bilan)</h3>
+        {/* CENTER: Wheel + controls */}
+        <div style={{ textAlign: 'center', display: 'grid', gap: 12 }}>
+          <div>
+            {[50, 100, 200].map((v) => (
+              <button
+                key={v}
+                onClick={() => { setTier(v as any); refWheel() }}
+                disabled={busy}
+                style={{ ...btn, marginRight: 8, opacity: tier === v ? 1 : 0.85 }}
+              >
+                {v} tanga
+              </button>
+            ))}
+          </div>
+          <div style={{ color: '#cbd5e1', fontSize: 14 }}>
+            {state?.state.status === 'SPINNING' ? 'Keyingi o‘yinchi tayyor!' : 'Aylantirishga tayyormisiz?'}
+          </div>
 
-            {/* Filter / tabs */}
-            <div className="tabs">
-              <label className="tab">
-                <input type="radio" name="cat" defaultChecked /> Mavjud
-              </label>
-              <label className="tab">
-                <input type="radio" name="cat" /> Yangisi
-              </label>
-              <label className="tab">
-                <input type="radio" name="cat" /> Yoqtirganlar
-              </label>
-            </div>
+          <Wheel slices={slices} spinning={busy} durationMs={4200} />
 
-            {/* Store list — fixed, non-widening */}
-            <div className="scroll">
-              <table className="store table-fixed">
-                <colgroup>
-                  <col style={{ width: '55%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '30%' }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th className="left">Nomi</th>
-                    <th className="left">Narx</th>
-                    <th className="left">Amal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.from({ length: 18 }).map((_, i) => (
-                    <tr key={i}>
-                      <td className="left ellipsis">Item {i + 1} — batafsil tavsif juda-uzun bo‘lsa ham…</td>
-                      <td className="left">{[50, 100, 200, 500][i % 4]}</td>
-                      <td className="left">
-                        <div className="stack">
-                          <button className="btn xs">Sotib olish</button>
-                          <button className="btn xs ghost">Savatcha</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div style={{ fontSize: 14 }}>
+            <span>Foydalanuvchi:</span>
+            <b style={{ marginLeft: 6 }}>{me?.username || '...'}</b>
+            <span style={{ marginLeft: 16 }}>Balans:</span>
+            <b style={{ marginLeft: 4 }}>{me?.balance ?? '...'}</b>
+          </div>
 
-            {/* Coin presets */}
-            <div className="chipbar">
-              <span className="chip">50 tanga</span>
-              <span className="chip">100 tanga</span>
-              <span className="chip">200 tanga</span>
+          <button onClick={doSpin} disabled={busy} style={{ ...btn, width: 140, margin: '0 auto' }}>
+            Spin (-{tier})
+          </button>
+
+          {allowGrant && (
+            <div style={card}>
+              <div style={title}>Demo: Coins</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <button style={btn} onClick={() => grant(50)}>+50</button>
+                <button style={btn} onClick={() => grant(100)}>+100</button>
+                <button style={btn} onClick={() => grant(200)}>+200</button>
+              </div>
+              <div style={{ color: '#64748b', fontSize: 12, marginTop: 6 }}>
+                Panel faqat <code>NEXT_PUBLIC_ALLOW_SELF_GRANT=true</code> bo‘lganda ko‘rinadi.
+              </div>
             </div>
-          </section>
-        </aside>
+          )}
+        </div>
+
+        {/* RIGHT: users + store */}
+        <div style={{ display: 'grid', gap: 16 }}>
+          <div style={{ ...card, textAlign: 'left' }}>
+            <div style={title}>Ishtirokchilar balansi</div>
+            <ul style={{ marginTop: 6 }}>
+              {state?.users?.map((u) => (
+                <li key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14, borderBottom: '1px solid #0f172a' }}>
+                  <span style={{ color: '#cbd5e1' }}>{u.username}</span>
+                  <b>{u.balance}</b>
+                </li>
+              ))}
+            </ul>
+            <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 3 soniyada yangilanadi.</div>
+          </div>
+
+          <div style={{ ...card, textAlign: 'left' }}>
+            <div style={title}>Do‘kon (sotib olish)</div>
+            {state?.store?.length ? (
+              <ul style={{ display: 'grid', gap: 8 }}>
+                {state.store.map((s) => {
+                  const canBuy = (me?.balance ?? 0) >= s.coinCost && !busy
+                  return (
+                    <li key={s.id} style={{ display: 'grid', gridTemplateColumns: '24px 1fr auto auto', alignItems: 'center', gap: 8 }}>
+                      {s.imageUrl ? (
+                        <img src={s.imageUrl} width={24} height={24} style={{ borderRadius: 6 }} />
+                      ) : (
+                        <span style={{ width: 24, height: 24, borderRadius: 6, background: '#334155', display: 'inline-block' }} />
+                      )}
+                      <span>{s.title}</span>
+                      <span style={{ ...badge }}>{s.coinCost} tanga</span>
+                      <button
+                        style={{ ...btn, opacity: canBuy ? 1 : 0.6 }}
+                        disabled={!canBuy}
+                        onClick={() => buy(s.id, s.title, s.coinCost)}
+                      >
+                        Sotib olish
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <div style={{ color: '#94a3b8' }}>Hali do‘konda mahsulot yo‘q.</div>
+            )}
+          </div>
+        </div>
       </div>
-
-      {/* ====== PAGE SCOPED STYLES (styled-jsx global) ====== */}
-      <style jsx global>{`
-        :root {
-          --bg: #0b111a;
-          --panel: #0f1420;
-          --muted: #9fb1c9;
-          --text: #dbe7ff;
-          --border: #243044;
-          --accent: #6aa6ff;
-          --accent2: #8b5cf6;
-        }
-
-        html, body {
-          background: var(--bg);
-          color: var(--text);
-        }
-        * { box-sizing: border-box; }
-
-        .page {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 50px 12px 24px; /* 50px top space as requested */
-          overflow-x: hidden; /* STOP horizontal widening */
-        }
-
-        .columns {
-          display: flex;
-          gap: 16px;
-          align-items: flex-start;
-          /* allow responsive wrap but never widen */
-          flex-wrap: wrap;
-        }
-
-        .panel {
-          background: var(--panel);
-          border: 1px solid var(--border);
-          border-radius: 14px;
-        }
-
-        .left, .right {
-          flex: 0 0 260px;          /* fixed sidebars */
-          max-width: 260px;
-          min-width: 0;             /* allow inner truncation */
-        }
-        .center {
-          flex: 1 1 0%;
-          min-width: 380px;
-          max-width: 640px;         /* wheel area never balloons */
-        }
-
-        .box {
-          padding: 12px;
-          overflow: hidden;         /* ensure children can't push width */
-        }
-
-        .title {
-          font-weight: 700;
-          margin: 0 0 8px 0;
-        }
-
-        .muted { color: var(--muted); }
-        .xs { font-size: 11px; }
-        .sm { font-size: 13px; }
-        .text { line-height: 1.5; }
-        .bold { font-weight: 700; }
-        .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .break { word-break: break-word; overflow-wrap: anywhere; }
-        .bullets { padding-left: 18px; margin: 0; }
-        .bullets li { margin: 6px 0; }
-
-        .scroll {
-          max-height: 420px;      /* vertical scroll instead of width growth */
-          overflow-y: auto;
-          overflow-x: hidden;
-          overscroll-behavior: contain;
-        }
-
-        .row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          padding: 6px 0;
-          min-width: 0;           /* critical for truncation */
-          border-bottom: 1px dashed rgba(255,255,255,0.05);
-        }
-        .row:last-child { border-bottom: 0; }
-        .row .label { flex: 1 1 auto; min-width: 0; }
-        .row .val { flex: 0 0 auto; opacity: 0.9; }
-
-        .center-inner { padding: 8px; }
-        .wheel-wrap {
-          width: 360px;
-          max-width: 100%;
-          margin: 10px auto 0;
-        }
-        .wheel-box {
-          position: relative;
-          width: 100%;
-          padding-top: 100%;      /* 1:1 square */
-          border: 1px solid var(--border);
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: radial-gradient(ellipse at center, #101827 0%, #0a1220 65%);
-        }
-        .wheel {
-          position: absolute;
-          inset: 8%;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          border: 1px solid var(--border);
-          font-weight: 700;
-          letter-spacing: 2px;
-          opacity: 0.7;
-        }
-        .pin {
-          position: absolute;
-          top: -6px;
-          left: 50%;
-          transform: translateX(-50%);
-          width: 0; height: 0;
-          border-left: 10px solid transparent;
-          border-right: 10px solid transparent;
-          border-bottom: 14px solid var(--accent);
-          filter: drop-shadow(0 2px 0 rgba(0,0,0,0.4));
-        }
-
-        .info-line {
-          margin: 10px auto 0;
-          display: flex; align-items: center; gap: 8px;
-          justify-content: center;
-          max-width: 90%;
-        }
-        .dot { width: 4px; height: 4px; background: var(--border); border-radius: 999px; }
-
-        .actions {
-          display: flex;
-          justify-content: center;
-          margin-top: 10px;
-        }
-
-        .btn {
-          background: linear-gradient(180deg, #1a2740, #131e33);
-          border: 1px solid var(--border);
-          color: var(--text);
-          padding: 10px 16px;
-          border-radius: 12px;
-          cursor: pointer;
-          user-select: none;
-          white-space: nowrap;
-        }
-        .btn:hover { filter: brightness(1.06); }
-        .btn:active { transform: translateY(1px); }
-        .btn.sm { padding: 6px 10px; font-size: 13px; border-radius: 10px; }
-        .btn.xs { padding: 5px 8px; font-size: 12px; border-radius: 10px; }
-        .btn.ghost {
-          background: transparent;
-          border-style: dashed;
-          opacity: 0.85;
-        }
-
-        .btns { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-
-        .tabs {
-          display: flex; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;
-        }
-        .tab { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
-        .tab input { accent-color: var(--accent2); }
-
-        .table-fixed { table-layout: fixed; width: 100%; border-collapse: collapse; }
-        .table-fixed thead th {
-          position: sticky; top: 0;
-          background: rgba(0,0,0,0.15);
-          backdrop-filter: blur(2px);
-          font-weight: 600;
-        }
-        th, td { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 8px 6px; }
-        .left { text-align: left; }
-
-        .stack { display: flex; gap: 6px; flex-wrap: wrap; }
-
-        .chipbar {
-          display: flex; gap: 8px; flex-wrap: wrap;
-          margin-top: 10px;
-        }
-        .chip {
-          font-size: 12px;
-          padding: 6px 10px;
-          background: rgba(138,160,255,0.12);
-          border: 1px solid var(--border);
-          border-radius: 999px;
-          white-space: nowrap;
-        }
-
-        /* Inputs / dropdowns stable borders (no width jump on focus/hover) */
-        input, select, button {
-          border-width: 1px;
-          border-style: solid;
-          border-color: var(--border);
-        }
-        input:focus, select:focus, button:focus {
-          outline: 2px solid rgba(255,255,255,0.08);
-          outline-offset: 0;
-        }
-      `}</style>
     </div>
-  );
+  )
+}
+
+/* consistent card/border styles + left alignment everywhere */
+const card: React.CSSProperties = {
+  background: '#0b1220',
+  border: '1px solid #142035',
+  borderRadius: 12,
+  padding: 14,
+}
+const title: React.CSSProperties = { fontWeight: 600, marginBottom: 6 }
+const btn: React.CSSProperties = {
+  background: '#1f2937',
+  border: '1px solid #374151',
+  color: '#e5e7eb',
+  borderRadius: 10,
+  padding: '10px 14px',
+  cursor: 'pointer',
+}
+const badge: React.CSSProperties = {
+  padding: '4px 8px',
+  border: '1px solid #334155',
+  borderRadius: 999,
+  fontSize: 12,
+  color: '#e5e7eb',
 }
