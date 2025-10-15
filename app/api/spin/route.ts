@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     const body = Body.parse(await req.json())
     const tier = body.tier
 
-    // Identify user from request headers (not cookies())
+    // Identify user from request headers (NOT cookies())
     const userId = await getUserIdFromCookie(req.headers as Headers)
     if (!userId) {
       return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 })
@@ -61,13 +61,12 @@ export async function POST(req: Request) {
         imageUrl = pick.imageUrl ?? null
       }
 
-      // Record win (no coinDelta field written to DB)
+      // Record win (NO `tier`, NO `coinDelta` — match your Prisma model)
       const win = await tx.win.create({
         data: {
           userId,
-          prizeId,       // may be null
-          title,         // text of the prize or message
-          tier,          // 50 | 100 | 200
+          prizeId,  // may be null
+          title,
         },
       })
 
