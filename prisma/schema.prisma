@@ -1,4 +1,10 @@
 // prisma/schema.prisma
+//
+// Notes:
+// - Only // and /// comments are used. No block comments.
+// - Defaults + optional fields are chosen to let `prisma db push` run on existing data.
+// - You can tighten constraints later (e.g., unique username) once data is clean.
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,68 +14,81 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id            String          @id @default(cuid())
-  tgId          String?         @unique
-  username      String?         @unique
-  passwordHash  String?
-  balance       Int             @default(0)
-  isAdmin       Boolean         @default(false)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+enum Role {
+  USER
+  ADMIN
+}
 
-  wins          Win[]
+model User {
+  id            String         @id @default(cuid())
+  // Keep optional to avoid “cannot be executed” when older rows have NULLs
+  tgId          String?        @unique
+  // Keep optional and NOT unique for now (add unique later when data is clean)
+  username      String?
+  passwordHash  String?
+  balance       Int            @default(0)
+  role          Role           @default(USER)
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  // Relations
+  spins         Win[]
   balanceEvents BalanceEvent[]
 }
 
 model Prize {
-  id         String   @id @default(cuid())
-  title      String
-  coinCost   Int
-  imageUrl   String?
-  active     Boolean  @default(true)
-  showInStore Boolean @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id          String    @id @default(cuid())
+  title       String
+  coinCost    Int
+  imageUrl    String?
+  active      Boolean   @default(true)
+  showInStore Boolean   @default(true)
 
-  wins       Win[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  @@unique([title, coinCost])
+  // Relation
+  wins        Win[]
+
+  // (Optional, add later after you verify no duplicates)
+  // @@unique([title, coinCost])
 }
 
 model Win {
-  id        String   @id @default(cuid())
-  userId    String
-  prizeId   String?
-  title     String
-  tier      Int      @default(0)
-  createdAt DateTime @default(now())
+  id         String    @id @default(cuid())
 
-  user   User  @relation(fields: [userId], references: [id])
-  prize  Prize @relation(fields: [prizeId], references: [id])
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Prize can be null (e.g., “Better luck next time”)
+  prizeId    String?
+  prize      Prize?    @relation(fields: [prizeId], references: [id], onDelete: SetNull)
+
+  title      String
+  tier       Int       // 50 | 100 | 200
+  createdAt  DateTime  @default(now())
 }
 
 model BalanceEvent {
-  id        String   @id @default(cuid())
-  userId    String
-  delta     Int
-  reason    String?
-  createdAt DateTime @default(now())
+  id         String    @id @default(cuid())
 
-  user User @relation(fields: [userId], references: [id])
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  delta      Int
+  reason     String?
+  createdAt  DateTime  @default(now())
 }
 
-/**
- * Global spin state. We keep defaults so prisma db push can run on existing rows.
- * Then app code can set these precisely at runtime.
- */
+// Global spin state record. Defaults allow push to succeed even with existing NULLs.
 model SpinState {
-  id          String   @id
-  status      String   @default("IDLE")
-  spinStartAt DateTime @default(now())
-  durationMs  Int      @default(0)
-  tier        Int      @default(0)
-  userName    String   @default("")
-  resultTitle String   @default("")
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default("global")
+  status       String   @default("IDLE")   // IDLE | SPINNING
+  spinStartAt  DateTime @default(now())
+  durationMs   Int      @default(0)
+  tier         Int      @default(0)
+  userName     String   @default("")
+  resultTitle  String   @default("")
+  updatedAt    DateTime @updatedAt
 }
