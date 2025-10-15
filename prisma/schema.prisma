@@ -78,12 +78,15 @@ model Spin {
 }
 
 model SpinState {
-  id          String   @id
-  status      String   // 'IDLE' | 'SPINNING'
-  spinStartAt DateTime?
-  durationMs  Int?
-  tier        Int?
-  userName    String?
-  resultTitle String?
-  updatedAt   DateTime @updatedAt   // keep to avoid data-loss warning
+  id          String   @id @default("global")
+  status      String
+  spinStartAt DateTime
+  durationMs  Int
+  tier        Int
+  userName    String
+  resultTitle String
+  updatedAt   DateTime @updatedAt
+
+  // NEW: who is currently spinning (nullable when idle)
+  byUserId    String?
 }
