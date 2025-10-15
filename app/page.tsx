@@ -1,257 +1,135 @@
+// app/page.tsx
 'use client'
 import useSWR from 'swr'
-import { useEffect, useMemo, useState } from 'react'
-import Wheel from './components/Wheel'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import Wheel from '@/components/Wheel'
+import WinModal from '@/components/WinModal'
 
-type StateRes = {
-  state: { status: 'IDLE' | 'SPINNING'; userName?: string | null; tier?: number | null; resultTitle?: string | null }
-  users: { id: string; username: string; balance: number }[]
-  store: { id: string; title: string; coinCost: number; imageUrl?: string | null }[]
-  lastWins: { user: string; title: string; imageUrl?: string | null }[]
+type Me = { ok:boolean; user?: { id:string; username:string; balance:number } }
+type State = { ok:boolean; spinning:boolean; byUserId:string|null; lastWin: { id:string; username:string; title:string; imageUrl?:string|null; at:string } | null }
+type Store = { ok:boolean; items: { id:string; title:string; coinCost:number; imageUrl?:string|null }[] }
+
+const api = async <T,>(u:string, init?:RequestInit) => {
+  const r = await fetch(u, init); if(!r.ok) throw new Error(await r.text()); return await r.json() as T
 }
-type MeRes = { ok: boolean; me?: { id: string; username: string; balance: number } }
 
-async function api<T>(url: string, init?: RequestInit) {
-  const res = await fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers || {}) } })
-  if (!res.ok) throw new Error(await res.text())
-  return (await res.json()) as T
-}
-const post = <T,>(url: string, body: any) => api<T>(url, { method: 'POST', body: JSON.stringify(body) })
+export default function Home() {
+  // who am i
+  const { data: meData, mutate: mutateMe } = useSWR<Me>('/api/me', api)
+  const me = meData?.user
 
-export default function Page() {
-  const { data: state } = useSWR<StateRes>(
-    '/api/state',
-    (u: string) => api<StateRes>(u),
-    { refreshInterval: 3000 }
-  )
+  // store items (small cards)
+  const { data: store } = useSWR<Store>('/api/store', api, { refreshInterval: 10000 })
 
-  const { data: wins } = useSWR<any[]>(
-    '/api/wins?take=5',
-    (u: string) => api<any[]>(u),
-    { refreshInterval: 4000 }
-  )
+  // global spin state (locks + wins)
+  const { data: st, mutate: mutateState } = useSWR<State>('/api/state', api, { refreshInterval: 2000 })
 
-  const { data: meRes, mutate: refMe } = useSWR<MeRes>(
-    '/api/me',
-    (u: string) => api<MeRes>(u),
-    { refreshInterval: 0 }
-  )
-  const me = meRes?.me
+  // wheel tier
+  const [tier, setTier] = useState<50|100|200>(50)
 
-  const [tier, setTier] = useState<50 | 100 | 200>(50)
+  // wheel labels (server decides exactly what can land; for UI we just show a subset/preview)
+  const wheelLabels = useMemo(()=>['Mehmon','Yangi','Another spin','+75 coins','Yandj','...'],[tier])
+
+  // spin animation
   const [spinning, setSpinning] = useState(false)
-  const [showAll, setShowAll] = useState(false)
-  const [tgInfo, setTgInfo] = useState<{ temp?: string } | null>(null)
+  const [angle, setAngle] = useState(0)
 
-  const { data: wheelData } = useSWR<{ ok: boolean; labels: string[] }>(
-    `/api/wheel?tier=${tier}`,
-    (u: string) => api<{ ok: boolean; labels: string[] }>(u),
-    { refreshInterval: 0 }
-  )
+  // popup
+  const [modal, setModal] = useState<{ open:boolean; user?:string; title?:string; img?:string|null }>({ open:false })
 
-  // Telegram-only auto login. No guest fallback.
-  useEffect(() => {
-    ;(async () => {
-      try {
-        const w = window as any
-        const tg = w?.Telegram?.WebApp
-        if (tg?.ready) tg.ready()
-        if (tg?.initData && tg.initData.length > 0) {
-          const r = await post<{ ok: boolean; user: any; tempPassword?: string }>('/api/bootstrap', { initData: tg.initData })
-          if (r?.tempPassword) setTgInfo({ temp: r.tempPassword })
-          await refMe()
-        }
-      } catch {}
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // show modal when LAST win changes (any user)
+  const lastWinId = useRef<string|undefined>(undefined)
+  useEffect(()=>{
+    if (!st?.lastWin) return
+    if (st.lastWin.id !== lastWinId.current) {
+      lastWinId.current = st.lastWin.id
+      setModal({ open:true, user: st.lastWin.username, title: st.lastWin.title, img: st.lastWin.imageUrl || null })
+    }
+  }, [st?.lastWin])
 
-  const slices = useMemo(() => (wheelData?.labels ?? []).map(label => ({ label })), [wheelData])
-
-  async function doSpin() {
-    setSpinning(true)
+  async function spin() {
+    if (!me) return alert('Avval kirish kerak')
+    if (st?.spinning && st.byUserId !== me.id) return
     try {
-      const res = await post<{ ok: true; durationMs: number; result: { title: string; coinDelta: number } }>('/api/spin', { tier: String(tier) })
-      setTimeout(async () => { await refMe(); setSpinning(false); alert(`"${me?.username || 'Foydalanuvchi'}", siz "${res.result.title}" yutib oldingiz 🎉`) }, res.durationMs)
-    } catch (e: any) {
-      setSpinning(false)
-      const msg = String(e?.message || e)
-      if (msg.includes('BUSY')) alert('Hozir aylanyapti, kuting.')
-      else if (msg.includes('NOT_ENOUGH_COINS')) alert('Tangalar yetarli emas.')
-      else alert('Xatolik.')
+      setSpinning(true)
+      setAngle(a => a + 1440 + Math.floor(Math.random()*360))
+      const res = await api<{ ok:boolean; win:{ title:string } }>('/api/spin', {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body: JSON.stringify({ tier })
+      })
+      // state polling will open the popup for everyone
+      await mutateState()
+      await mutateMe()
+    } catch (e:any) {
+      alert(e?.message || 'Xatolik')
+    } finally {
+      setTimeout(()=>setSpinning(false), 3300)
     }
   }
 
-  async function buy(prizeId: string, title: string, cost: number) {
-    try { await post('/api/store/buy', { prizeId }); await refMe(); alert(`"${me?.username || 'Foydalanuvchi'}", siz do‘kondan "${title}" ni ${cost} tangaga oldingiz 🎉`) }
-    catch (e: any) { const msg = String(e?.message || e); if (msg.includes('NOT_ENOUGH_COINS')) alert('Tangalar yetarli emas.'); else alert('Sotib olishda xatolik.') }
-  }
+  const disabled = st?.spinning && st.byUserId !== me?.id
 
-  const busy = state?.state.status === 'SPINNING' || spinning
+  // layout tokens
+  const card:React.CSSProperties={ border:'1px solid #1f2937', background:'#0b1220', borderRadius:12, padding:12 }
+  const btn:React.CSSProperties={ padding:'10px 14px', borderRadius:12, border:'1px solid #374151', background:'#111827', color:'#e5e7eb', cursor:'pointer' }
+  const muted:React.CSSProperties={ color:'#9ca3af' }
 
-  // AUTH
-  const [mode, setMode] = useState<'login'|'register'>('login')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-
-  async function doLogin() {
-    try { await post('/api/auth/login', { username, password }); await refMe() }
-    catch { alert('Login xato. Parol yoki foydalanuvchi noto‘g‘ri.') }
-  }
-  async function doRegister() {
-    try { await post('/api/auth/register', { username, password }); await refMe(); alert('Ro‘yxatdan o‘tildi. Xush kelibsiz!') }
-    catch (e:any) { const msg = String(e?.message || e); if (msg.includes('USERNAME_TAKEN')) alert('Bu foydalanuvchi nomi band.'); else alert('Ro‘yxatdan o‘tishda xatolik.') }
-  }
-
-  // Not logged in → Auth screen
-  if (!me) {
-    return (
-      <div style={{ maxWidth: 520, margin: '60px auto', padding: 16 }}>
-        <div style={{ ...card, textAlign:'left' }}>
-          <h2 style={{ marginTop:0 }}>Kirish / Ro‘yxatdan o‘tish</h2>
-          <div style={{ color:'#94a3b8', fontSize:14, marginBottom:12 }}>
-            Telegram ichidan ochsangiz — avtomatik kiriladi. Aks holda bu yerda akkaunt oching yoki kiring.
-          </div>
-
-          {tgInfo?.temp && (
-            <div style={{ ...card, borderColor:'#14532d', background:'#062012', marginBottom:12 }}>
-              <div><b>Telegram orqali kirdingiz.</b></div>
-              <div>Saytga keyinchalik kirish uchun vaqtinchalik parolingiz:</div>
-              <div style={{ marginTop:8, fontSize:18 }}><code>{tgInfo.temp}</code></div>
-            </div>
-          )}
-
-          <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-            <button style={{ ...btn, background: mode==='login' ? '#1f2937':'#0f172a' }} onClick={()=>setMode('login')}>Kirish</button>
-            <button style={{ ...btn, background: mode==='register' ? '#1f2937':'#0f172a' }} onClick={()=>setMode('register')}>Ro‘yxatdan o‘tish</button>
-          </div>
-
-          <div style={{ display:'grid', gap:8 }}>
-            <input placeholder="Foydalanuvchi nomi" value={username} onChange={e=>setUsername(e.target.value)} style={input}/>
-            <input placeholder="Parol" type="password" value={password} onChange={e=>setPassword(e.target.value)} style={input}/>
-            {mode==='login' ? (
-              <button style={btn} onClick={doLogin}>Kirish</button>
-            ) : (
-              <button style={btn} onClick={doRegister}>Ro‘yxatdan o‘tish</button>
-            )}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Logged-in UI (fixed 3-column desktop grid)
   return (
-    <div style={{ maxWidth: 1320, margin: '0 auto', padding: 16, paddingTop: 20 }}>
-      <div className="desktop-grid">
-        {/* LEFT */}
-        <div className="left-col">
-          <div style={{ ...card, textAlign:'left' }}>
-            <div style={title}>Qoidalar (tanga olish)</div>
-            <ul style={{ margin: '6px 0 0 18px', color: '#cbd5e1', fontSize: 14, lineHeight: '22px' }}>
-              <li>Onlayn 300.000 so‘m = 10 tanga</li>
-              <li>Oflayn 1.000.000 so‘m = 10 tanga</li>
-            </ul>
-            <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Admin bu ro‘yxatni keyin kengaytirishi mumkin.</div>
-          </div>
-          <div style={{ ...card, textAlign:'left' }}>
-            <div style={title}>Oxirgi 5 yutuq</div>
-            {!wins?.length && <div style={{ color: '#94a3b8', fontSize: 14 }}>Hali yutuqlar ro‘yxati yo‘q.</div>}
-            <ul style={{ marginTop: 6, display: 'grid', gap: 6 }}>
-              {state?.lastWins?.map((w, i) => (
-                <li key={i} style={{ fontSize: 14 }}>
-                  <span style={badge}>{w.user}</span> {w.title}
-                </li>
-              ))}
-            </ul>
-            <div style={{ color: '#64748b', fontSize: 12, marginTop: 8 }}>Ro‘yxat har 4 soniyada yangilanadi.</div>
-          </div>
-        </div>
-
-        {/* CENTER */}
-        <div className="center-col">
-          <div style={{ textAlign: 'center' }}>
-            {[50, 100, 200].map((v) => (
-              <button key={v} onClick={() => setTier(v as any)} disabled={busy} style={{ ...btn, marginRight: 8, opacity: tier===v ? 1 : 0.85 }}>
-                {v} tanga
-              </button>
-            ))}
-          </div>
-          <div style={{ color: '#cbd5e1', fontSize: 16, textAlign: 'center', marginTop: 8 }}>
-            {state?.state.status === 'SPINNING' ? 'Keyingi o‘yinchi tayyor!' : 'Aylantirishga tayyormisiz?'}
-          </div>
-          <div style={{ marginTop: 8 }}><Wheel slices={slices} spinning={busy} durationMs={4200} /></div>
-          <div style={{ fontSize: 14, textAlign: 'center', marginTop: 10 }}>
-            <span>Foydalanuvchi:</span><b style={{ marginLeft: 6 }}>{me?.username}</b>
-            <span style={{ marginLeft: 16 }}>Balans:</span><b style={{ marginLeft: 4 }}>{me?.balance ?? 0}</b>
-          </div>
-          <div style={{ textAlign: 'center', marginTop: 10 }}>
-            <button onClick={doSpin} disabled={busy} style={{ ...btn, width: 140 }}>Spin (-{tier})</button>
-          </div>
-
-          {/* fixed-width dropdown to avoid widening */}
-          <div className="fixed-dropdown" style={{ marginTop: 16 }}>
-            <button onClick={() => setShowAll(s => !s)} style={{ ...btn, width:'100%', display:'flex', justifyContent:'space-between' }}>
-              <span>Barcha sovg‘alar (narxlari bilan)</span>
-              <span style={{ opacity: 0.8 }}>{showAll ? '▲' : '▼'}</span>
+    <div style={{ paddingTop: 50, paddingBottom: 24 }}>
+      {/* mobile-first: price buttons + wheel */}
+      <div style={{ display:'grid', placeItems:'center', gap:10 }}>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center' }}>
+          {[50,100,200].map(v=>(
+            <button key={v} style={{ ...btn, opacity: tier===v?1:.86 }} onClick={()=>setTier(v as 50|100|200)}>
+              {v} tanga
             </button>
-            {showAll && (
-              <div className="dropdown-body" style={{ ...card, marginTop:8 }}>
-                {(state?.store?.length ?? 0) === 0 && <div style={{ color: '#94a3b8' }}>Hali sovg‘alar yo‘q.</div>}
-                <ul style={{ display:'grid', gap:6 }}>
-                  {state?.store?.map((s) => (
-                    <li key={s.id} style={{ display:'grid', gridTemplateColumns:'24px minmax(0,1fr) auto', gap:8, alignItems:'center', border:'1px solid #142035', borderRadius:8, padding:'6px 8px' }}>
-                      {s.imageUrl ? <img src={s.imageUrl} width={24} height={24} style={{ borderRadius:6 }} /> : <span style={{ width:24, height:24, background:'#334155', borderRadius:6, display:'inline-block' }}/>}
-                      <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.title}</span>
-                      <span style={badge}>{s.coinCost} tanga</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
+          ))}
         </div>
 
-        {/* RIGHT */}
-        <div className="right-col">
-          <div style={{ ...card, textAlign:'left' }}>
-            <div style={title}>Ishtirokchilar balansi</div>
-            <ul style={{ marginTop: 6 }}>
-              {state?.users?.map((u) => (
-                <li key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14, borderBottom: '1px solid #0f172a' }}>
-                  <span style={{ color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{u.username}</span>
-                  <b>{u.balance}</b>
-                </li>
-              ))}
-            </ul>
-          </div>
+        <h3 style={{ margin:'6px 0 4px' }}>Aylantirishga tayyormisiz?</h3>
+        <Wheel labels={wheelLabels} spinning={spinning} angle={angle} />
 
-          <div style={{ ...card, textAlign:'left', overflow:'hidden' }}>
-            <div style={title}>Do‘kon (sotib olish)</div>
-            {(state?.store?.length ?? 0) === 0 && <div style={{ color:'#94a3b8' }}>Hali do‘konda mahsulot yo‘q.</div>}
-            <ul style={{ display:'grid', gap:8 }}>
-              {state?.store?.map((s) => {
-                const canBuy = (me?.balance ?? 0) >= s.coinCost && !busy
-                return (
-                  <li key={s.id} style={{ display:'grid', gridTemplateColumns:'24px minmax(0,1fr) auto auto', gap:8, alignItems:'center', border:'1px solid #142035', borderRadius:10, padding:'6px 8px' }}>
-                    {s.imageUrl ? <img src={s.imageUrl} width={24} height={24} style={{ borderRadius:6 }} /> : <span style={{ width:24, height:24, background:'#334155', borderRadius:6, display:'inline-block' }}/>}
-                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.title}</span>
-                    <span style={badge}>{s.coinCost} tanga</span>
-                    <button style={{ ...btn, width:110 }} disabled={!canBuy} onClick={() => buy(s.id, s.title, s.coinCost)}>Sotib olish</button>
-                  </li>
-                )
-              })}
-            </ul>
+        <div style={{ marginTop:8, ...muted }}>
+          Foydalanuvchi: <b>{me?.username || '—'}</b> &nbsp; Balans: <b>{me?.balance ?? 0}</b>
+        </div>
+
+        <button disabled={disabled || spinning} onClick={spin}
+                style={{ ...btn, marginTop:6, opacity: (disabled||spinning)?0.6:1 }}>
+          Spin (-{tier})
+        </button>
+      </div>
+
+      {/* lists below on mobile; on desktop place side-by-side via CSS grid if you prefer */}
+
+      {/* Store block: compact cards */}
+      <div style={{ maxWidth: 1000, margin:'20px auto', padding:'0 14px' }}>
+        <div style={{ ...card }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))', gap:10 }}>
+            {store?.items?.map(it=>(
+              <div key={it.id} style={{ border:'1px solid #1f2937', borderRadius:10, overflow:'hidden' }}>
+                <div style={{ width:'100%', aspectRatio:'1/1', background:'#111827' }}>
+                  {it.imageUrl ? <img src={it.imageUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }}/> : null}
+                </div>
+                <div style={{ padding:8, fontSize:13 }}>
+                  <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{it.title}</div>
+                  <div style={{ opacity:.7 }}>{it.coinCost} tanga</div>
+                  <button style={{ ...btn, width:'100%', marginTop:6 }}>Sotib olish</button>
+                </div>
+              </div>
+            )) || <div style={{ opacity:.7 }}>Hozircha do‘konda sovg‘alar yo‘q.</div>}
           </div>
         </div>
       </div>
+
+      {/* WIN MODAL for everyone */}
+      <WinModal
+        open={modal.open}
+        onClose={()=>setModal(m=>({ ...m, open:false }))}
+        username={modal.user}
+        title={modal.title}
+        imageUrl={modal.img || undefined}
+      />
     </div>
   )
 }
-
-/* tokens */
-const card: React.CSSProperties = { background: '#0b1220', border: '1px solid #142035', borderRadius: 12, padding: 14 }
-const title: React.CSSProperties = { fontWeight: 600, marginBottom: 6, textAlign: 'left' }
-const btn: React.CSSProperties = { background: '#1f2937', border: '1px solid #374151', color: '#e5e7eb', borderRadius: 10, padding: '10px 14px', cursor: 'pointer' }
-const badge: React.CSSProperties = { padding: '4px 8px', border: '1px solid #334155', borderRadius: 999, fontSize: 12, color: '#e5e7eb', whiteSpace: 'nowrap' }
-const input: React.CSSProperties = { background:'#111827', border:'1px solid #334155', color:'#e5e7eb', borderRadius:8, padding:'10px 12px' }
