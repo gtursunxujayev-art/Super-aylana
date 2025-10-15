@@ -13,17 +13,22 @@ export async function GET() {
     }),
   ])
 
-  // Always return a stable payload so the client can't crash
   return NextResponse.json({
     ok: true,
-    spinning: state?.status === 'SPINNING' ?? false,
-    byUserId: (state as any)?.byUserId ?? null,         // optional — may be null
-    userName: state?.userName ?? '',                    // required in schema; empty is fine for idle
+
+    // FIX: produce a boolean without using ?? on a boolean expression
+    spinning: !!(state && state.status === 'SPINNING'),
+
+    // Optional fields with safe fallbacks
+    byUserId: (state as any)?.byUserId ?? null,
+    userName: state?.userName ?? '',
     resultTitle: state?.resultTitle ?? '',
     tier: (state as any)?.tier ?? null,
     spinStartAt: state?.spinStartAt ?? null,
     durationMs: (state as any)?.durationMs ?? null,
     updatedAt: state?.updatedAt ?? null,
+
+    // Last win block (or null)
     lastWin: last
       ? {
           id: last.id,
