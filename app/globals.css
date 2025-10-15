@@ -7,48 +7,27 @@ html, body {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
 }
 
-/* --- DESKTOP LAYOUT --- */
-/* Fixed columns (like your screenshot): 320px | fluid | 360px */
-.desktop-grid {
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 360px;
-  column-gap: 20px;
-  align-items: start;
-}
-
-/* Left / Center / Right columns */
-.left-col, .center-col, .right-col { min-width: 0; }
-.left-col  { display: grid; gap: 20px; }
-.center-col{ display: flex; flex-direction: column; gap: 10px; }
-.right-col { display: grid; gap: 20px; }
-
-/* Cards, buttons, badges can stay in component files.
-   These are just layout rules to keep widths fixed. */
-
-/* --- MOBILE / TABLET BREAKPOINT --- */
-/* Only collapse to a vertical stack on small viewports.
-   We push the breakpoint lower so 1000px wide screens stay in desktop grid. */
-@media (max-width: 980px) {
-  .desktop-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-  .left-col, .center-col, .right-col { width: 100%; }
-}
-
-/* Prevent any inner content from widening a column */
 *,
 *::before,
 *::after { box-sizing: border-box; }
 
-/* Utility: fixed-width dropdown container in center column so it never widens layout */
-.center-col .fixed-dropdown {
-  width: 420px;
-  max-width: 100%;
-  margin: 0 auto;
+/* Fixed desktop grid: 320px | fluid | 360px */
+.desktop-grid{
+  display:grid;
+  grid-template-columns: 320px minmax(0,1fr) 360px;
+  column-gap:20px;
+  align-items:start;
 }
-.center-col .fixed-dropdown .dropdown-body {
-  max-height: 260px;
-  overflow: auto; /* scroll inside, not expand outside */
+.left-col{ display:grid; gap:20px; min-width:0; }
+.center-col{ display:flex; flex-direction:column; gap:10px; min-width:0; }
+.right-col{ display:grid; gap:20px; min-width:0; }
+
+/* Mobile stack (keep desktop until fairly small) */
+@media (max-width: 980px){
+  .desktop-grid{ display:flex; flex-direction:column; gap:20px; }
+  .left-col,.center-col,.right-col{ width:100%; }
 }
+
+/* Center dropdown: fixed width so opening doesn't widen layout */
+.fixed-dropdown{ width:420px; max-width:100%; margin:0 auto; }
+.dropdown-body{ max-height:260px; overflow:auto; }
