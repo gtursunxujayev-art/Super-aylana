@@ -13,7 +13,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'EMPTY' }, { status: 400 })
   }
 
-  const user = await prisma.user.findUnique({ where: { username } })
+  // username is NOT unique in your schema -> use findFirst
+  const user = await prisma.user.findFirst({
+    where: { username },
+    select: { id: true, passwordHash: true },
+  })
+
   if (!user || !user.passwordHash) {
     return NextResponse.json({ ok: false, error: 'INVALID' }, { status: 401 })
   }
