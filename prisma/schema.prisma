@@ -1,83 +1,82 @@
-// ---------- Prisma Client ----------
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
 
-// ---------- Database ----------
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// ---------- Models ----------
 model User {
-  id           String          @id @default(cuid())
-  tgId         String          @unique
-  username     String          @unique
-  passwordHash String?
-  balance      Int             @default(0)
-  isAdmin      Boolean         @default(false)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id             String          @id @default(uuid())
+  username       String          @unique
+  passwordHash   String?
+  balance        Int             @default(0)
+  isAdmin        Boolean         @default(false)
+  tgId           String          @default("")        // was required with NULLs → give default
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
-  // Relations
+  // relations
   wins           Win[]
   spins          Spin[]
   balanceEvents  BalanceEvent[]
 }
 
 model Prize {
-  id          String  @id @default(cuid())
+  id          String   @id @default(uuid())
   title       String
   coinCost    Int
   imageUrl    String?
-  active      Boolean @default(true)
-  showInStore Boolean @default(true)
-
-  // Relations
-  wins Win[]
+  active      Boolean  @default(true)
+  showInStore Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([title, coinCost])
-}
-
-model Win {
-  id        String   @id @default(cuid())
-  userId    String
-  prizeId   String?    // optional foreign key
-  title     String
-  createdAt DateTime @default(now())
-
-  user   User   @relation(fields: [userId], references: [id])
-  prize  Prize? @relation(fields: [prizeId], references: [id]) // <-- make relation optional
+  wins        Win[]
 }
 
 model Spin {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid())
   userId    String
   tier      Int
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Win {
+  id         String   @id @default(uuid())
+  userId     String
+  prizeId    String?                              // OPTIONAL ← fixes earlier schema complaint
+  title      String                               // what was won (text label)
+  coinDelta  Int      @default(0)                 // +coins or -coins
+  tier       Int      @default(50)                // 50 | 100 | 200
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id])
+  prize      Prize?   @relation(fields: [prizeId], references: [id])
 }
 
 model SpinState {
-  /// Single row with id = 'global'
-  id          String   @id
-  status      String   @default("IDLE")
-  spinStartAt DateTime @default(now())
-  durationMs  Int      @default(0)
-  tier        Int      @default(0)
-  userName    String   @default("")
-  resultTitle String   @default("")
+  id          String   @id                        // use 'global'
+  status      String                               // 'IDLE' | 'SPINNING'
+  spinStartAt DateTime @default(now())             // give a safe default
+  durationMs  Int      @default(0)                 // safe default
+  tier        Int      @default(50)                // safe default
+  userName    String   @default("")                // last spinner name (optional)
+  resultTitle String   @default("")                // last result label (optional)
   updatedAt   DateTime @updatedAt
 }
 
 model BalanceEvent {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid())
   userId    String
   delta     Int
-  reason    String
+  reason    String?
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
 }
