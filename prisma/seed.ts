@@ -1,49 +1,59 @@
 // prisma/seed.ts
 import { PrismaClient } from '@prisma/client'
+import bcrypt from 'bcryptjs'
 const prisma = new PrismaClient()
 
 async function main() {
-  // Ensure the single global SpinState row exists and is healthy
+  // Ensure global spin state
   await prisma.spinState.upsert({
     where: { id: 'global' },
-    update: {}, // updatedAt will auto-bump
+    update: {},
     create: {
       id: 'global',
       status: 'IDLE',
-      // these are optional to set because schema has defaults,
-      // but we set them explicitly to guarantee no NULLs exist
-      spinStartAt: new Date(),
-      durationMs: 0,
-      tier: 50,
       userName: '',
       resultTitle: '',
     },
   })
 
-  // Optional: ensure there is an admin user if you need one for first login
-  // Replace demo values as appropriate; skip if you already create one elsewhere
-  const adminName = 'ADMIN1'
-  const passwordHash = null // if you’re using Telegram-only or external auth, keep null
+  // Ensure admin user (edit these if you want)
+  const adminUsername = 'admin'
+  const adminPassword = 'admin123' // change in production
+  const passwordHash = await bcrypt.hash(adminPassword, 10)
 
   await prisma.user.upsert({
-    where: { username: adminName },
-    update: {},
-    create: {
-      username: adminName,
+    where: { username: adminUsername },
+    update: {
       isAdmin: true,
-      balance: 0,
-      passwordHash,        // supply hash if you use password login
-      tgId: '',            // default ok
+      passwordHash,
+    },
+    create: {
+      username: adminUsername,
+      passwordHash,
+      isAdmin: true,
     },
   })
+
+  // Sample prizes if table is empty
+  const count = await prisma.prize.count()
+  if (count === 0) {
+    await prisma.prize.createMany({
+      data: [
+        { title: 'Small Gift', coinCost: 50, showInStore: true },
+        { title: 'Medium Gift', coinCost: 100, showInStore: true },
+        { title: 'Big Gift', coinCost: 200, showInStore: true },
+      ],
+    })
+  }
+
+  console.log('Seed completed.')
 }
 
 main()
-  .then(async () => {
-    await prisma.$disconnect()
-  })
-  .catch(async (e) => {
+  .catch((e) => {
     console.error(e)
-    await prisma.$disconnect()
     process.exit(1)
+  })
+  .finally(async () => {
+    await prisma.$disconnect()
   })
