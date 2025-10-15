@@ -80,13 +80,16 @@ model Spin {
 model SpinState {
   id          String   @id @default("global")
   status      String
-  spinStartAt DateTime
-  durationMs  Int
-  tier        Int
+  // Make these optional to avoid failing when existing row has NULLs
+  spinStartAt DateTime?
+  durationMs  Int?
+  tier        Int?
+
   userName    String
   resultTitle String
   updatedAt   DateTime @updatedAt
 
-  // NEW: who is currently spinning (nullable when idle)
+  // who is currently spinning (nullable when idle)
   byUserId    String?
 }
+
