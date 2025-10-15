@@ -1,44 +1,35 @@
-import { NextResponse } from 'next/server'
-import { prisma } from '@/app/lib/prisma'
-import bcrypt from 'bcryptjs'
-import { SignJWT } from 'jose'
-
-const COOKIE = 'auth'
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'dev-secret')
+import { NextResponse } from 'next/server';
+import { prisma } from '@/app/lib/prisma';
+import bcrypt from 'bcryptjs';
 
 export async function POST(req: Request) {
-  const { username, password } = await req.json()
+  try {
+    const { username, password } = await req.json();
 
-  if (!username || !password || password.length < 4) {
-    return NextResponse.json({ ok: false, error: 'INVALID_INPUT' }, { status: 400 })
+    if (!username || !password) {
+      return NextResponse.json({ ok: false, error: 'REQUIRED' }, { status: 400 });
+    }
+
+    const exists = await prisma.user.findFirst({ where: { username } });
+    if (exists) {
+      return NextResponse.json({ ok: false, error: 'USERNAME_TAKEN' }, { status: 409 });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Adjust fields if your schema uses different names
+    const user = await prisma.user.create({
+      data: {
+        username,
+        passwordHash,
+        isAdmin: false,
+        balance: 0,
+      },
+      select: { id: true, username: true },
+    });
+
+    return NextResponse.json({ ok: true, user });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: 'SERVER' }, { status: 500 });
   }
-
-  // username not unique -> warn if a same-name user exists
-  const existing = await prisma.user.findFirst({ where: { username }, select: { id: true } })
-  if (existing) {
-    return NextResponse.json({ ok: false, error: 'TAKEN' }, { status: 409 })
-  }
-
-  const passwordHash = await bcrypt.hash(password, 10)
-  const user = await prisma.user.create({
-    data: { username, passwordHash, balance: 0 },
-    select: { id: true },
-  })
-
-  const token = await new SignJWT({})
-    .setProtectedHeader({ alg: 'HS256' })
-    .setSubject(user.id)
-    .setIssuedAt()
-    .setExpirationTime('30d')
-    .sign(JWT_SECRET)
-
-  const res = NextResponse.json({ ok: true })
-  res.cookies.set(COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 60 * 60 * 24 * 30,
-  })
-  return res
 }
