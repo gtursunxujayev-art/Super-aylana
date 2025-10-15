@@ -3,12 +3,13 @@ import { prisma } from '../../lib/prisma'
 import { z } from 'zod'
 import { issueSid } from '../../lib/auth'
 import crypto from 'crypto'
+import bcrypt from 'bcryptjs'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
 const Body = z.object({
-  initData: z.string().optional(),     // Telegram WebApp initData (preferred)
-  tgId: z.string().optional(),         // fallback for dev only
-  username: z.string().optional(),
-  visible: z.boolean().optional(),
+  initData: z.string(), // Telegram WebApp initData
 })
 
 function verifyTelegramInitData(initData: string, botToken?: string) {
@@ -17,20 +18,15 @@ function verifyTelegramInitData(initData: string, botToken?: string) {
   const hash = params.get('hash')
   if (!hash) return null
 
-  // Build data_check_string
   const entries: string[] = []
-  for (const [k, v] of Array.from(params.entries())
-    .filter(([k]) => k !== 'hash')
-    .sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [k, v] of Array.from(params.entries()).filter(([k]) => k !== 'hash').sort(([a], [b]) => a.localeCompare(b))) {
     entries.push(`${k}=${v}`)
   }
   const dataCheckString = entries.join('\n')
 
-  // Secret = sha256(botToken)
   const secret1 = crypto.createHash('sha256').update(botToken).digest()
   const check1 = crypto.createHmac('sha256', secret1).update(dataCheckString).digest('hex')
 
-  // Some SDKs use HMAC('WebAppData', token)
   const secret2 = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest()
   const check2 = crypto.createHmac('sha256', secret2).update(dataCheckString).digest('hex')
 
@@ -38,45 +34,41 @@ function verifyTelegramInitData(initData: string, botToken?: string) {
 
   const userJson = params.get('user')
   if (!userJson) return null
-  try {
-    return JSON.parse(userJson) as { id: number; username?: string; first_name?: string; last_name?: string }
-  } catch { return null }
+  try { return JSON.parse(userJson) as { id: number; username?: string; first_name?: string; last_name?: string } }
+  catch { return null }
 }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}))
-  const { initData, tgId, username, visible } = Body.parse(body)
+  const { initData } = Body.parse(await req.json())
+  const tgUser = verifyTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN)
+  if (!tgUser) return NextResponse.json({ ok: false, error: 'BAD_INITDATA' }, { status: 401 })
 
-  let tgUser: { id: number; username?: string; first_name?: string; last_name?: string } | null = null
+  const username = tgUser.username || `${tgUser.first_name || 'User'} ${tgUser.last_name || ''}`.trim() || `tg_${tgUser.id}`
 
-  if (initData) {
-    tgUser = verifyTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN)
-    if (!tgUser) {
-      return NextResponse.json({ ok: false, error: 'BAD_INITDATA' }, { status: 401 })
+  let tempPassword: string | null = null
+
+  const existing = await prisma.user.findUnique({ where: { tgId: String(tgUser.id) } })
+  if (!existing) {
+    tempPassword = Math.random().toString(36).slice(-10)
+    const passwordHash = await bcrypt.hash(tempPassword, 10)
+    await prisma.user.create({
+      data: { tgId: String(tgUser.id), username, passwordHash, visible: true },
+    })
+  } else {
+    if (existing.username !== username) {
+      await prisma.user.update({ where: { id: existing.id }, data: { username } })
+    }
+    if (!existing.passwordHash) {
+      tempPassword = Math.random().toString(36).slice(-10)
+      const passwordHash = await bcrypt.hash(tempPassword, 10)
+      await prisma.user.update({ where: { id: existing.id }, data: { passwordHash } })
     }
   }
 
-  // Fallback only if explicit tgId+username sent (dev usage)
-  const userData =
-    tgUser
-      ? { tgId: String(tgUser.id), username: tgUser.username || `${tgUser.first_name || 'User'} ${tgUser.last_name || ''}`.trim() }
-      : (tgId && username ? { tgId, username } : null)
+  const user = await prisma.user.findUnique({ where: { tgId: String(tgUser.id) } })
+  const token = await issueSid(user!.id)
 
-  if (!userData) {
-    return NextResponse.json({ ok: false, error: 'MISSING_USER' }, { status: 400 })
-  }
-
-  const user = await prisma.user.upsert({
-    where: { tgId: userData.tgId },
-    create: { tgId: userData.tgId, username: userData.username, visible: visible ?? true },
-    update: { username: userData.username, ...(visible === undefined ? {} : { visible }) },
-  })
-
-  const token = await issueSid(user.id)
-
-  // Clear any previous sid first to avoid "guest" sticking around
-  const res = NextResponse.json({ ok: true, user })
-  res.cookies.set('sid', '', { httpOnly: true, sameSite: 'lax', maxAge: 0, path: '/' })
+  const res = NextResponse.json({ ok: true, user: { id: user!.id, username: user!.username }, tempPassword })
   res.cookies.set('sid', token, { httpOnly: true, sameSite: 'lax', maxAge: 60 * 60 * 24 * 30, path: '/' })
   return res
 }
