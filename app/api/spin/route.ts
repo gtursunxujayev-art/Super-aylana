@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     const body = Body.parse(await req.json())
     const tier = body.tier
 
-    // Get user from request headers (NOT cookies())
+    // Identify user from request headers (not cookies())
     const userId = await getUserIdFromCookie(req.headers as Headers)
     if (!userId) {
       return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 })
@@ -53,7 +53,6 @@ export async function POST(req: Request) {
       let prizeId: string | null = null
       let title = 'Another spin'
       let imageUrl: string | null = null
-      let coinDelta = 0
 
       if (prizes.length > 0) {
         const pick = prizes[Math.floor(Math.random() * prizes.length)]
@@ -62,14 +61,13 @@ export async function POST(req: Request) {
         imageUrl = pick.imageUrl ?? null
       }
 
-      // Record win
+      // Record win (no coinDelta field written to DB)
       const win = await tx.win.create({
         data: {
           userId,
-          prizeId,
-          title,
-          coinDelta,
-          tier,
+          prizeId,       // may be null
+          title,         // text of the prize or message
+          tier,          // 50 | 100 | 200
         },
       })
 
@@ -83,14 +81,13 @@ export async function POST(req: Request) {
         winId: win.id,
         title,
         imageUrl,
-        coinDelta,
         prizeId,
       }
     })
 
     return NextResponse.json({ ok: true, ...result })
   } catch (err: any) {
-    // Best-effort unlock
+    // Best-effort unlock (safe even if not locked yet)
     try {
       await prisma.spinState.update({
         where: { id: 'global' },
@@ -98,10 +95,10 @@ export async function POST(req: Request) {
       })
     } catch {}
 
-    if (err.message === 'BUSY') {
+    if (err?.message === 'BUSY') {
       return NextResponse.json({ ok: false, error: 'BUSY' }, { status: 409 })
     }
-    if (err.message === 'NO_COINS') {
+    if (err?.message === 'NO_COINS') {
       return NextResponse.json({ ok: false, error: 'NO_COINS' }, { status: 402 })
     }
 
