@@ -1,5 +1,6 @@
 // prisma/schema.prisma
-// Safe for `prisma db push` on an existing database with legacy NULLs and rows.
+// Safe for `prisma db push` on an existing database with legacy rows & columns.
+// Legacy fields/tables are kept with @ignore / @@ignore so nothing gets dropped.
 
 generator client {
   provider = "prisma-client-js"
@@ -18,10 +19,13 @@ enum Role {
 model User {
   id            String         @id @default(cuid())
 
-  // Keep optional for now so legacy rows with NULL are valid.
-  tgId          String?        @unique
+  // Legacy columns (present in DB). Keep so Prisma won't drop them.
+  // Mark @ignore so they are not exposed/managed by Prisma Client.
+  isAdmin       Boolean?       @default(false) @ignore
+  visible       Boolean?       @default(true)  @ignore
 
-  // Keep optional and NOT unique for now; you can tighten later.
+  // Keep optional to avoid NOT NULL migrations on old rows
+  tgId          String?        @unique
   username      String?
   passwordHash  String?
 
@@ -29,7 +33,7 @@ model User {
   role          Role           @default(USER)
 
   createdAt     DateTime       @default(now())
-  // Important: default(now()) allows adding this required column on a table with rows.
+  // default(now()) allows backfill; @updatedAt keeps it fresh
   updatedAt     DateTime       @updatedAt @default(now())
 
   // Relations
@@ -46,7 +50,6 @@ model Prize {
   showInStore Boolean   @default(true)
 
   createdAt   DateTime  @default(now())
-  // Important: default(now()) so the backfill works on existing 5 rows.
   updatedAt   DateTime  @updatedAt @default(now())
 
   wins        Win[]
@@ -67,7 +70,7 @@ model Win {
 
   title      String
 
-  // Was failing because table already has 7 rows; give a default so the add is safe.
+  // Default so adding this to an existing table with rows is safe
   tier       Int       @default(0)
 
   createdAt  DateTime  @default(now())
@@ -84,7 +87,7 @@ model BalanceEvent {
   createdAt  DateTime  @default(now())
 }
 
-// Keep legacy row valid by NOT forcing NOT NULL where NULLs already exist.
+// Keep legacy row valid by NOT forcing NOT NULL where legacy NULLs already exist.
 model SpinState {
   id           String    @id @default("global")
   status       String    @default("IDLE")     // IDLE | SPINNING
@@ -94,9 +97,19 @@ model SpinState {
   durationMs   Int?      @default(0)
   tier         Int?      @default(0)
 
-  // Optional “who / what” text fields with safe defaults
+  // Optional text fields with safe defaults
   userName     String    @default("")
   resultTitle  String    @default("")
 
   updatedAt    DateTime  @updatedAt @default(now())
+}
+
+/**
+ * Legacy table present in DB. Keep it so Prisma DOES NOT try to drop it.
+ * Marked @@ignore so it’s not exposed/managed by Prisma Client.
+ * You don’t need to list all columns here; a minimal shape is fine when ignored.
+ */
+model Spin {
+  id String @id @default(cuid())
+  @@ignore
 }
