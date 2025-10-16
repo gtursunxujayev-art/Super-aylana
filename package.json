@@ -2,34 +2,32 @@
   "name": "super-aylana",
   "version": "1.0.0",
   "private": true,
-  "engines": {
-    "node": ">=18.17"
-  },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
     "deploy:migrate": "prisma db push --accept-data-loss"
   },
-  {
+  "engines": {
+    "node": ">=18.17 <23"
+  },
   "dependencies": {
     "@prisma/client": "5.22.0",
-    "@vercel/blob": "^0.23.4",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
+    "@vercel/blob": "0.23.4",
+    "bcryptjs": "2.4.3",
+    "jsonwebtoken": "9.0.2",
     "next": "14.2.3",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "swr": "^2.2.5",
-    "zod": "^3.23.8"
-  }
-},
+    "swr": "2.2.5",
+    "zod": "3.23.8"
+  },
   "devDependencies": {
-    "@types/jsonwebtoken": "^9.0.6",
+    "@types/jsonwebtoken": "9.0.6",
+    "@types/node": "20.14.10",
+    "@types/react": "18.2.79",
     "prisma": "5.22.0",
     "ts-node": "10.9.2",
-    "typescript": "5.6.3",
-    "@types/node": "20.14.10",
-    "@types/react": "18.2.79"
+    "typescript": "5.6.3"
   }
 }
