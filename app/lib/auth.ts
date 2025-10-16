@@ -1,96 +1,123 @@
-import { cookies as nextCookies, type ReadonlyRequestCookies } from 'next/headers'
-import { NextResponse } from 'next/server'
-import { SignJWT, jwtVerify } from 'jose'
+// app/lib/auth.ts
+import jwt from 'jsonwebtoken'
+import { cookies as nextCookies } from 'next/headers'
+import type { ReadonlyRequestCookies } from 'next/dist/server/web/spec-extension/adapters/request-cookies'
 
-export const SID_COOKIE = 'sid'
-const ALG = 'HS256'
-const DEFAULT_MAX_AGE_SECONDS = 60 * 60 * 24 * 30 // 30 days
+/**
+ * Cookie / JWT settings
+ */
+const COOKIE_NAME = 'sid'
+const MAX_AGE_SECONDS = 60 * 60 * 24 * 30 // 30 days
 
-function getKey(): Uint8Array {
-  const secret = process.env.AUTH_SECRET
-  if (!secret || secret.length < 32) {
+function ensureSecret() {
+  if (!process.env.JWT_SECRET) {
     throw new Error(
-      'AUTH_SECRET is missing/short. Set a long random string in .env/Vercel → Environment Variables.'
+      'JWT_SECRET is not set. Add JWT_SECRET to your Vercel/ENV settings.'
     )
   }
-  return new TextEncoder().encode(secret)
 }
 
-export async function issueSid(
-  payload: { userId: string },
-  maxAgeSeconds: number = DEFAULT_MAX_AGE_SECONDS
-): Promise<string> {
-  const key = getKey()
-  const iat = Math.floor(Date.now() / 1000)
-  const exp = iat + maxAgeSeconds
-  return await new SignJWT({ uid: payload.userId })
-    .setProtectedHeader({ alg: ALG })
-    .setIssuedAt(iat)
-    .setExpirationTime(exp)
-    .sign(key)
+/**
+ * Create a signed session token
+ */
+export function signSession(payload: { userId: string; isAdmin?: boolean }) {
+  ensureSecret()
+  return jwt.sign(payload, process.env.JWT_SECRET as string, {
+    expiresIn: `${MAX_AGE_SECONDS}s`,
+  })
 }
 
-export async function verifySid(token?: string | null): Promise<{ userId: string } | null> {
+/**
+ * Set the auth cookie
+ */
+export function setLoginCookie(
+  token: string,
+  jar?: ReturnType<typeof nextCookies>
+) {
+  const c = jar ?? nextCookies()
+  c.set(COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true, // Vercel is HTTPS → safe
+    path: '/',
+    maxAge: MAX_AGE_SECONDS,
+  })
+}
+
+/**
+ * Clear the auth cookie
+ */
+export function clearLoginCookie(jar?: ReturnType<typeof nextCookies>) {
+  const c = jar ?? nextCookies()
+  c.delete(COOKIE_NAME)
+}
+
+/**
+ * Get raw JWT token string from cookies
+ */
+export function getTokenFromCookies(
+  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
+): string | null {
+  try {
+    const jar = c ?? nextCookies()
+    // Both ReadonlyRequestCookies and ResponseCookies have get(name)?.value
+    // We avoid strict typing gymnastics by using "as any" here.
+    const value = (jar as any).get?.(COOKIE_NAME)?.value
+    return value ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Verify token and return userId (or null)
+ */
+export function getUserIdFromCookie(
+  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
+): string | null {
+  ensureSecret()
+  const token = getTokenFromCookies(c)
   if (!token) return null
   try {
-    const key = getKey()
-    const { payload } = await jwtVerify(token, key, { algorithms: [ALG] })
-    const uid = (payload as any).uid
-    return typeof uid === 'string' && uid ? { userId: uid } : null
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as
+      | { userId?: string }
+      | undefined
+    return decoded?.userId ?? null
   } catch {
     return null
   }
 }
 
-export async function getUserIdFromCookie(
-  cookieStore?: ReadonlyRequestCookies
-): Promise<string | null> {
-  const store = cookieStore ?? safeCookies()
-  const token = store?.get(SID_COOKIE)?.value
-  const res = await verifySid(token)
-  return res?.userId ?? null
-}
-
-// legacy helper some files might still import
-export async function getUserFromCookie(
-  cookieStore?: ReadonlyRequestCookies
-): Promise<{ id: string } | null> {
-  const uid = await getUserIdFromCookie(cookieStore)
-  return uid ? { id: uid } : null
-}
-
-export function setAuthCookie(res: NextResponse, token: string, maxAgeSeconds = DEFAULT_MAX_AGE_SECONDS) {
-  res.cookies.set(SID_COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: maxAgeSeconds,
-  })
-}
-
-export function clearAuthCookie(res: NextResponse) {
-  res.cookies.set(SID_COOKIE, '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 0,
-  })
-}
-
-export function jsonWithAuthCookie(data: any, options?: { status?: number; token?: string | null }) {
-  const res = NextResponse.json(data, { status: options?.status ?? 200 })
-  if (typeof options?.token === 'string') {
-    if (options.token.length === 0) clearAuthCookie(res)
-    else setAuthCookie(res, options.token)
-  }
-  return res
-}
-
-function safeCookies(): ReadonlyRequestCookies | null {
+/**
+ * Optional: get admin flag from cookie
+ */
+export function getIsAdminFromCookie(
+  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
+): boolean {
+  ensureSecret()
+  const token = getTokenFromCookies(c)
+  if (!token) return false
   try {
-    return nextCookies()
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as
+      | { isAdmin?: boolean }
+      | undefined
+    return Boolean(decoded?.isAdmin)
   } catch {
-    return null
+    return false
   }
+}
+
+/**
+ * Helper to require admin in API routes.
+ * Throws Error('UNAUTHORIZED') if not admin.
+ */
+export function requireAdminFromCookies(
+  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
+) {
+  const userId = getUserIdFromCookie(c)
+  const isAdmin = getIsAdminFromCookie(c)
+  if (!userId || !isAdmin) {
+    throw new Error('UNAUTHORIZED')
+  }
+  return { userId, isAdmin }
+}
