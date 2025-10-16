@@ -1,9 +1,5 @@
 // prisma/schema.prisma
-//
-// Notes:
-// - Only // and /// comments are used. No block comments.
-// - Defaults + optional fields are chosen to let `prisma db push` run on existing data.
-// - You can tighten constraints later (e.g., unique username) once data is clean.
+// Safe for `prisma db push` on an existing database with legacy NULLs and rows.
 
 generator client {
   provider = "prisma-client-js"
@@ -21,16 +17,20 @@ enum Role {
 
 model User {
   id            String         @id @default(cuid())
-  // Keep optional to avoid “cannot be executed” when older rows have NULLs
+
+  // Keep optional for now so legacy rows with NULL are valid.
   tgId          String?        @unique
-  // Keep optional and NOT unique for now (add unique later when data is clean)
+
+  // Keep optional and NOT unique for now; you can tighten later.
   username      String?
   passwordHash  String?
+
   balance       Int            @default(0)
   role          Role           @default(USER)
 
   createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  // Important: default(now()) allows adding this required column on a table with rows.
+  updatedAt     DateTime       @updatedAt @default(now())
 
   // Relations
   spins         Win[]
@@ -46,12 +46,12 @@ model Prize {
   showInStore Boolean   @default(true)
 
   createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  // Important: default(now()) so the backfill works on existing 5 rows.
+  updatedAt   DateTime  @updatedAt @default(now())
 
-  // Relation
   wins        Win[]
 
-  // (Optional, add later after you verify no duplicates)
+  // Add later once data is clean:
   // @@unique([title, coinCost])
 }
 
@@ -61,12 +61,15 @@ model Win {
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Prize can be null (e.g., “Better luck next time”)
+  // May be null (e.g., “no prize / try again”)
   prizeId    String?
   prize      Prize?    @relation(fields: [prizeId], references: [id], onDelete: SetNull)
 
   title      String
-  tier       Int       // 50 | 100 | 200
+
+  // Was failing because table already has 7 rows; give a default so the add is safe.
+  tier       Int       @default(0)
+
   createdAt  DateTime  @default(now())
 }
 
@@ -81,14 +84,19 @@ model BalanceEvent {
   createdAt  DateTime  @default(now())
 }
 
-// Global spin state record. Defaults allow push to succeed even with existing NULLs.
+// Keep legacy row valid by NOT forcing NOT NULL where NULLs already exist.
 model SpinState {
-  id           String   @id @default("global")
-  status       String   @default("IDLE")   // IDLE | SPINNING
-  spinStartAt  DateTime @default(now())
-  durationMs   Int      @default(0)
-  tier         Int      @default(0)
-  userName     String   @default("")
-  resultTitle  String   @default("")
-  updatedAt    DateTime @updatedAt
+  id           String    @id @default("global")
+  status       String    @default("IDLE")     // IDLE | SPINNING
+
+  // Optional with defaults so existing NULLs are OK and new rows have values.
+  spinStartAt  DateTime? @default(now())
+  durationMs   Int?      @default(0)
+  tier         Int?      @default(0)
+
+  // Optional “who / what” text fields with safe defaults
+  userName     String    @default("")
+  resultTitle  String    @default("")
+
+  updatedAt    DateTime  @updatedAt @default(now())
 }
