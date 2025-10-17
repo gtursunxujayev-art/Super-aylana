@@ -1,6 +1,7 @@
+// app/api/auth/logout/route.ts
 import { jsonWithAuthCookie } from '@/app/lib/auth'
 
 export async function POST() {
-  // token: '' clears the cookie
-  return jsonWithAuthCookie({ ok: true }, { token: '' })
+  // Pass an empty string to clear the cookie (matches jsonWithAuthCookie signature)
+  return jsonWithAuthCookie({ ok: true }, '')
 }
