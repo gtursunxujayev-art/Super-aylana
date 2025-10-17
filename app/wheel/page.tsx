@@ -95,3 +95,61 @@ export default function WheelPage() {
 
         <div className="relative w-[420px] h-[420px] rounded-full border-4 border-white/20 bg-neutral-950 overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)]">
           <div ref={wheelRef} className="absolute inset-0 rounded-full transition-transform">
+            {entries.map((e, i) => {
+              const rotate = sliceAngle * i;
+              const color = colors[i % colors.length];
+              return (
+                <div key={i} className="absolute left-1/2 bottom-1/2 origin-bottom-left"
+                  style={{
+                    width: "50%", height: "50%",
+                    transform: `rotate(${rotate}deg) skewY(${90 - sliceAngle}deg)`,
+                    background: `linear-gradient(135deg, ${color} 0%, ${color}99 100%)`
+                  }}>
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 origin-left rotate-[90deg] text-xs text-center text-white font-semibold tracking-wide"
+                    style={{
+                      transform: `skewY(-${90 - sliceAngle}deg) rotate(${sliceAngle/2}deg) translateX(60px)`
+                    }}>
+                    {e.name}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* center circle */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-24 h-24 rounded-full bg-neutral-900 border border-white/10 shadow-inner flex items-center justify-center text-sm text-neutral-400">
+              Super Aylana
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Balance + Spin */}
+      <div className="flex items-center gap-4">
+        <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
+        <button disabled={spinning}
+          onClick={spin}
+          className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold">
+          {spinning ? "Aylanyapti..." : `Spin (${mode})`}
+        </button>
+      </div>
+
+      {/* Popup */}
+      {popup && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center" onClick={()=>setPopup(null)}>
+          <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
+            {popup.imageUrl ? (
+              <img src={popup.imageUrl} alt="" className="mx-auto w-40 h-40 object-cover rounded-xl"/>
+            ) : null}
+            <div className="text-lg text-white">
+              <b>{popup.user}</b> siz <b>{popup.prize}</b> yutib oldingiz.
+            </div>
+            <button className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded text-sm text-neutral-300"
+              onClick={()=>setPopup(null)}>Yopish</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
