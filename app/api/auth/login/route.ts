@@ -32,7 +32,6 @@ export async function POST(req: Request) {
 
   const token = issueSid(user.id)
   return jsonWithAuthCookie(
-    { ok: true, user: { id: user.id, username: user.username } },
-    token
-  )
-}
+  { ok: true, user: { id: user.id, username: user.username } },
+  { token }          // ✅ pass as object, not raw string
+)
