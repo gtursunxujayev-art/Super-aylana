@@ -4,11 +4,10 @@
   "scripts": {
     "dev": "next dev",
     "postinstall": "prisma generate",
-    "build": "prisma db push && next build",
+    "build": "prisma db push --force-reset && next build",
     "start": "next start",
     "db:push": "prisma db push"
-}
-,
+  },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "@upstash/redis": "^1.30.5",
