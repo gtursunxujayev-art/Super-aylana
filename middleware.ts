@@ -1,24 +1,19 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import jwt from "jsonwebtoken";
 
+// Edge-safe middleware: only checks cookie presence, no JWT verify here.
+// Full verification remains inside server routes using Node runtime.
 const COOKIE = "sa_token";
-const JWT_SECRET = process.env.JWT_SECRET!;
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const token = req.cookies.get(COOKIE)?.value;
-
-  const protectedPaths = ["/wheel", "/admin"];
-  const isProtected = protectedPaths.some(p => pathname.startsWith(p));
+  const isProtected =
+    pathname.startsWith("/wheel") || pathname.startsWith("/admin");
 
   if (!isProtected) return NextResponse.next();
 
-  let valid = false;
-  if (token) {
-    try { jwt.verify(token, JWT_SECRET); valid = true; } catch {}
-  }
-  if (!valid) {
+  const token = req.cookies.get(COOKIE)?.value;
+  if (!token) {
     const url = new URL("/login", req.url);
     return NextResponse.redirect(url);
   }
