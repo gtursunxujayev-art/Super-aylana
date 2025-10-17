@@ -1,168 +1,113 @@
 // app/lib/auth.ts
 import jwt from 'jsonwebtoken'
-import { NextResponse } from 'next/server'
-import { cookies as nextCookies } from 'next/headers'
-import type { ReadonlyRequestCookies } from 'next/dist/server/web/spec-extension/adapters/request-cookies'
+import { cookies, type ReadonlyRequestCookies } from 'next/headers'
+import type { NextResponse } from 'next/server'
 
-/**
- * Cookie / JWT settings
- */
+// ----- config -----
 const COOKIE_NAME = 'sid'
-const MAX_AGE_SECONDS = 60 * 60 * 24 * 30 // 30 days
+const MAX_AGE_SECONDS = 60 * 60 * 24 * 7 // 7 days
 
-function ensureSecret() {
-  if (!process.env.JWT_SECRET) {
-    throw new Error('JWT_SECRET is not set. Add JWT_SECRET in your env.')
-  }
-}
-
-/**
- * Create a signed session token (JWT)
- */
-export function signSession(payload: { userId: string; isAdmin?: boolean }) {
-  ensureSecret()
-  return jwt.sign(payload, process.env.JWT_SECRET as string, {
-    expiresIn: `${MAX_AGE_SECONDS}s`,
-  })
-}
-
-/**
- * Set the auth cookie
- */
-export function setLoginCookie(
-  token: string,
-  jar?: ReturnType<typeof nextCookies>
-) {
-  const c = jar ?? nextCookies()
-  c.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: true,
-    path: '/',
-    maxAge: MAX_AGE_SECONDS,
-  })
-}
-
-/**
- * Clear the auth cookie
- */
-export function clearLoginCookie(jar?: ReturnType<typeof nextCookies>) {
-  const c = jar ?? nextCookies()
-  c.delete(COOKIE_NAME)
-}
-
-/**
- * Get raw JWT token string from cookies
- */
-export function getTokenFromCookies(
-  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
-): string | null {
-  try {
-    const jar = c ?? nextCookies()
-    const value = (jar as any).get?.(COOKIE_NAME)?.value
-    return value ?? null
-  } catch {
-    return null
-  }
-}
-
-/**
- * Verify token and return payload { userId, isAdmin } (or null)
- */
-export function readSession(
-  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
-): { userId: string; isAdmin?: boolean } | null {
-  ensureSecret()
-  const token = getTokenFromCookies(c)
-  if (!token) return null
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as
-      | { userId?: string; isAdmin?: boolean }
-      | undefined
-    if (!decoded?.userId) return null
-    return { userId: decoded.userId, isAdmin: decoded.isAdmin }
-  } catch {
-    return null
-  }
-}
-
-/**
- * Convenience: just the userId (or null)
- */
-export function getUserIdFromCookie(
-  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
-): string | null {
-  const s = readSession(c)
-  return s?.userId ?? null
-}
-
-/**
- * Convenience: admin flag
- */
-export function getIsAdminFromCookie(
-  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
-): boolean {
-  const s = readSession(c)
-  return Boolean(s?.isAdmin)
-}
-
-/**
- * Helper to require admin in API routes.
- * Throws Error('UNAUTHORIZED') if not admin.
- */
-export function requireAdminFromCookies(
-  c?: ReadonlyRequestCookies | ReturnType<typeof nextCookies>
-) {
-  const s = readSession(c)
-  if (!s?.userId || !s.isAdmin) {
-    throw new Error('UNAUTHORIZED')
+function getSecret(): string {
+  const s = process.env.JWT_SECRET
+  if (!s) {
+    throw new Error('JWT_SECRET is not set')
   }
   return s
 }
 
-/* ------------------------------------------------------------------
- * Compatibility shims for your existing route imports
- * (so you don’t have to edit the routes right now)
- * ------------------------------------------------------------------*/
-
-/**
- * Old name used in routes: issueSid → creates a JWT
- */
-export const issueSid = signSession
-
-/**
- * Old helper used in routes: jsonWithAuthCookie
- * - Sets/clears cookie based on provided token
- * - Returns NextResponse.json(data, init)
- */
-export function jsonWithAuthCookie(
-  data: any,
-  options?: {
-    token?: string | null // if provided and truthy → set cookie; if null → clear
-    status?: number
-    headers?: HeadersInit
-  }
-) {
-  const res = NextResponse.json(data, {
-    status: options?.status ?? 200,
-    headers: options?.headers,
+// Small cookie parser for plain Headers case
+function parseCookieHeader(header: string | null): Record<string, string> {
+  const map: Record<string, string> = {}
+  if (!header) return map
+  header.split(';').forEach((part) => {
+    const [k, ...rest] = part.trim().split('=')
+    if (!k) return
+    map[k] = decodeURIComponent(rest.join('=') || '')
   })
+  return map
+}
 
-  const c = nextCookies()
+// Create a signed JWT with user id as subject
+export function issueSid(userId: string): string {
+  return jwt.sign({ sub: userId }, getSecret(), { expiresIn: `${MAX_AGE_SECONDS}s` })
+}
 
-  if (options && 'token' in options) {
-    if (options.token) {
-      c.set(COOKIE_NAME, options.token, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: true,
-        path: '/',
-        maxAge: MAX_AGE_SECONDS,
-      })
-    } else {
-      c.delete(COOKIE_NAME)
-    }
+// Verify JWT and return user id or null
+export function verifySid(token: string | undefined | null): string | null {
+  if (!token) return null
+  try {
+    const payload = jwt.verify(token, getSecret()) as { sub?: string }
+    return payload?.sub ?? null
+  } catch {
+    return null
   }
+}
 
+/**
+ * Read the current user id from:
+ *  - next/headers cookies()   (when called in server components/route handlers)
+ *  - or a plain Headers object (when called with req.headers)
+ */
+export function getUserIdFromCookie(
+  source?: ReadonlyRequestCookies | Headers | null
+): string | null {
+  try {
+    // Case 1: source not provided → use cookies() API
+    if (!source) {
+      const token = cookies().get(COOKIE_NAME)?.value
+      return verifySid(token)
+    }
+
+    // Case 2: Headers object
+    if (typeof (source as Headers).get === 'function') {
+      const token = parseCookieHeader((source as Headers).get('cookie'))[COOKIE_NAME]
+      return verifySid(token)
+    }
+
+    // Case 3: Next's RequestCookies
+    const token = (source as ReadonlyRequestCookies).get(COOKIE_NAME)?.value
+    return verifySid(token)
+  } catch {
+    return null
+  }
+}
+
+// Attach the auth cookie to a JSON response (helper)
+export function jsonWithAuthCookie<T extends object>(
+  body: T,
+  userId: string,
+  init?: ResponseInit
+) {
+  const token = issueSid(userId)
+
+  // Create a plain Response and set cookie header manually to keep it framework-agnostic
+  const res = new Response(JSON.stringify(body), {
+    ...(init || {}),
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...(init?.headers || {}),
+      // one Set-Cookie here; Vercel/Next will merge correctly
+      'set-cookie': `${COOKIE_NAME}=${encodeURIComponent(
+        token
+      )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${MAX_AGE_SECONDS}; ${
+        process.env.NODE_ENV === 'production' ? 'Secure; ' : ''
+      }`,
+    },
+  })
+  return res
+}
+
+// Clear the cookie (useful for /logout)
+export function jsonClearAuthCookie<T extends object>(body: T, init?: ResponseInit) {
+  const res = new Response(JSON.stringify(body), {
+    ...(init || {}),
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...(init?.headers || {}),
+      'set-cookie': `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; ${
+        process.env.NODE_ENV === 'production' ? 'Secure; ' : ''
+      }`,
+    },
+  })
   return res
 }
