@@ -1,11 +1,28 @@
-import { cookies as nextCookies, type ReadonlyRequestCookies } from 'next/headers'
+// app/lib/auth.ts
 import jwt from 'jsonwebtoken'
+import {
+  cookies as nextCookies,
+  type ReadonlyRequestCookies,
+} from 'next/headers'
 import { NextResponse } from 'next/server'
 
+/**
+ * Cookie / JWT settings
+ */
 const COOKIE_NAME = 'sid'
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret' // set JWT_SECRET in Vercel
 
-// Existing verifySid remains the same
+// ------------------------------------------------------------------
+// JWT helpers
+// ------------------------------------------------------------------
+
+/** Create a signed session token for a user id. */
+export function issueSid(uid: string): string {
+  // 30 days expiry; adjust as needed
+  return jwt.sign({ uid }, JWT_SECRET, { expiresIn: '30d' })
+}
+
+/** Verify a token and return payload or null. */
 function verifySid(token: string): { uid: string } | null {
   try {
     return jwt.verify(token, JWT_SECRET) as { uid: string }
@@ -14,19 +31,28 @@ function verifySid(token: string): { uid: string } | null {
   }
 }
 
-// ✅ Replace this whole function:
+// ------------------------------------------------------------------
+// Cookie helpers (work in both Edge & Node on Vercel)
+// ------------------------------------------------------------------
+
+/**
+ * Read user id from cookies or headers.
+ * - Pass `cookies()` (ReadonlyRequestCookies) from server code, OR
+ * - Pass `req.headers` (Headers) from route handlers, OR
+ * - Pass nothing (it will call cookies() internally).
+ */
 export async function getUserIdFromCookie(
-  source?: Headers | ReadonlyRequestCookies
+  source?: ReadonlyRequestCookies | Headers
 ): Promise<string | null> {
-  // Case 1: When no argument, use cookies() (e.g., in server components)
+  // Case 1: no arg -> use global cookies()
   if (!source) {
-    const c = nextCookies().get(COOKIE_NAME)?.value
-    if (!c) return null
-    const payload = verifySid(c)
+    const token = nextCookies().get(COOKIE_NAME)?.value
+    if (!token) return null
+    const payload = verifySid(token)
     return payload?.uid ?? null
   }
 
-  // Case 2: Called with ReadonlyRequestCookies
+  // Case 2: ReadonlyRequestCookies (has .get but NOT .append)
   if ('get' in source && !('append' in source)) {
     const token = source.get(COOKIE_NAME)?.value
     if (!token) return null
@@ -34,16 +60,19 @@ export async function getUserIdFromCookie(
     return payload?.uid ?? null
   }
 
-  // Case 3: Called with Headers
+  // Case 3: Headers (has .append method)
   if (source instanceof Headers) {
     const raw = source.get('cookie')
     if (!raw) return null
-    const cookies = raw.split(';').reduce((acc, c) => {
-      const [k, v] = c.trim().split('=')
-      if (k) acc[k] = decodeURIComponent(v || '')
-      return acc
-    }, {} as Record<string, string>)
-    const token = cookies[COOKIE_NAME]
+
+    const map = new Map<string, string>()
+    for (const part of raw.split(';')) {
+      const [k, ...rest] = part.trim().split('=')
+      if (!k) continue
+      map.set(k, decodeURIComponent(rest.join('=') ?? ''))
+    }
+
+    const token = map.get(COOKIE_NAME)
     if (!token) return null
     const payload = verifySid(token)
     return payload?.uid ?? null
@@ -52,78 +81,49 @@ export async function getUserIdFromCookie(
   return null
 }
 
-// ------------------------------------------------------------------
-// Cookie helpers (works with both Edge & Node runtimes on Vercel)
-// ------------------------------------------------------------------
-function cookieHeaderToMap(cookieHeader: string | null): Map<string, string> {
-  const map = new Map<string, string>()
-  if (!cookieHeader) return map
-  for (const part of cookieHeader.split(';')) {
-    const [k, ...rest] = part.trim().split('=')
-    const v = rest.join('=')
-    if (k) map.set(k, decodeURIComponent(v ?? ''))
-  }
-  return map
-}
-
-export async function getUserIdFromCookie(
-  hdrs: Headers | undefined = undefined
-): Promise<string | null> {
-  // If headers are not provided (e.g., in server components), read from server cookies()
-  if (!hdrs) {
-    const c = cookies().get(COOKIE_NAME)?.value
-    if (!c) return null
-    const payload = verifySid(c)
-    return payload?.uid ?? null
-  }
-
-  // When called inside an API Route with Request.headers
-  const raw = hdrs.get('cookie')
-  const map = cookieHeaderToMap(raw)
-  const token = map.get(COOKIE_NAME)
-  if (!token) return null
-  const payload = verifySid(token)
-  return payload?.uid ?? null
-}
-
 /**
- * Sends JSON and sets/clears the auth cookie.
- * Pass a token string to set; pass '' (empty string) to clear.
+ * Return a JSON response and (optionally) set/clear the auth cookie.
+ * Usage:
+ *   jsonWithAuthCookie({ ok: true }, { token })        // set cookie
+ *   jsonWithAuthCookie({ ok: true }, { token: '' })    // clear cookie
+ *   jsonWithAuthCookie({ ok: true })                   // just JSON
  */
-export function jsonWithAuthCookie<T extends Record<string, any>>(
+export function jsonWithAuthCookie<T>(
   body: T,
-  token: string
-) {
+  opts?: { token?: string; maxAgeDays?: number }
+): NextResponse<T> {
   const res = NextResponse.json(body)
+  if (!opts) return res
 
-  if (token) {
-    // IMPORTANT for Vercel HTTPS on mobile browsers:
-    // sameSite:'none' + secure:true so the cookie is accepted.
-    res.cookies.set(COOKIE_NAME, token, {
+  // If token is provided, set cookie. If token === '', clear it.
+  if (typeof opts.token === 'string') {
+    if (opts.token === '') {
+      res.cookies.set(COOKIE_NAME, '', {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: true,
+        path: '/',
+        maxAge: 0,
+      })
+      return res
+    }
+
+    const maxAgeSec = Math.floor((opts.maxAgeDays ?? 30) * 24 * 60 * 60)
+    res.cookies.set(COOKIE_NAME, opts.token, {
       httpOnly: true,
+      sameSite: 'lax',
       secure: true,
-      sameSite: 'none',
       path: '/',
-      maxAge: 60 * 60 * 24 * 30, // 30 days
-    })
-  } else {
-    // clear cookie
-    res.cookies.set(COOKIE_NAME, '', {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-      path: '/',
-      maxAge: 0,
+      maxAge: maxAgeSec,
     })
   }
 
   return res
 }
 
-// Convenience for server components/middleware that only need current UID
-export function readSession(): { userId: string | null } {
-  const c = cookies().get(COOKIE_NAME)?.value
-  if (!c) return { userId: null }
-  const payload = verifySid(c)
-  return { userId: payload?.uid ?? null }
+/** Optional tiny helper some routes import. */
+export async function readSession():
+  Promise<{ uid: string } | null> {
+  const uid = await getUserIdFromCookie()
+  return uid ? { uid } : null
 }
