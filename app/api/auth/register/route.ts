@@ -35,10 +35,11 @@ export async function POST(req: Request) {
     },
   })
 
-  const token = issueSid({ uid: user.id })
+  // ✅ Pass plain string ID
+  const token = issueSid(user.id)
 
   return jsonWithAuthCookie(
     { ok: true, user: { id: user.id, username: user.username } },
-    { token } // pass as object
+    { token }
   )
 }
