@@ -4,20 +4,24 @@ import { useEffect, useState } from "react";
 type User = { id: string; name: string; login: string; balance: number; role: "USER"|"ADMIN" };
 type Item = { id: string; name: string; price: number; imageUrl?: string|null; active: boolean };
 type Reward = { id: string; username: string; price: number; prize: string; imageUrl?: string|null; createdAt: string };
+type StoreItem = { id: string; active: boolean; item: Item };
 
 export default function AdminPage() {
   const [tab, setTab] = useState<"rewards"|"coins"|"users"|"items"|"store">("rewards");
   const [users, setUsers] = useState<User[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [rewards, setRewards] = useState<Reward[]>([]);
+  const [store, setStore] = useState<StoreItem[]>([]);
   const [give, setGive] = useState({ userId: "", delta: 0, reason: "" });
   const [newItem, setNewItem] = useState({ name: "", price: 100, imageUrl: "" });
+  const [addStoreItemId, setAddStoreItemId] = useState<string>("");
 
   async function loadUsers(){ const r = await fetch("/api/admin/users"); if (r.ok) setUsers(await r.json()); }
   async function loadItems(){ const r = await fetch("/api/items"); if (r.ok) setItems(await r.json()); }
   async function loadRewards(){ const r = await fetch("/api/admin/rewards"); if (r.ok) setRewards(await r.json()); }
+  async function loadStore(){ const r = await fetch("/api/store"); if (r.ok) setStore(await r.json()); }
 
-  useEffect(()=>{ loadUsers(); loadItems(); loadRewards(); }, []);
+  useEffect(()=>{ loadUsers(); loadItems(); loadRewards(); loadStore(); }, []);
 
   async function doGive(){
     const r = await fetch("/api/admin/coins", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(give) });
@@ -26,6 +30,19 @@ export default function AdminPage() {
   async function addItem(){
     const r = await fetch("/api/items", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(newItem) });
     if (r.ok) { setNewItem({ name:"", price:100, imageUrl:""}); loadItems(); } else alert("Xatolik");
+  }
+  async function storeAdd(){
+    if (!addStoreItemId) return;
+    const r = await fetch("/api/store", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ itemId: addStoreItemId }) });
+    if (r.ok) { setAddStoreItemId(""); loadStore(); } else alert("Xatolik");
+  }
+  async function storeToggle(id: string, active: boolean) {
+    const r = await fetch("/api/store", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id, active }) });
+    if (r.ok) loadStore(); else alert("Xatolik");
+  }
+  async function storeDelete(id: string) {
+    const r = await fetch("/api/store", { method: "DELETE", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
+    if (r.ok) loadStore(); else alert("Xatolik");
   }
 
   return (
@@ -41,7 +58,7 @@ export default function AdminPage() {
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left">
-              <th className="p-2">User</th><th className="p-2">Price</th><th className="p-2">Prize</th><th className="p-2">Image</th><th className="p-2">Time</th>
+              <th className="p-2">User</th><th className="p-2">Mode</th><th className="p-2">Prize</th><th className="p-2">Image</th><th className="p-2">Time</th>
             </tr></thead>
             <tbody>
               {rewards.map(r=>(
@@ -90,7 +107,7 @@ export default function AdminPage() {
 
       {tab==="items" && (
         <div className="space-y-4">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <input className="bg-white/10 px-3 py-2 rounded" placeholder="Name" value={newItem.name} onChange={e=>setNewItem(v=>({...v, name: e.target.value}))}/>
             <input type="number" className="bg-white/10 px-3 py-2 rounded w-28" placeholder="Price" value={newItem.price} onChange={e=>setNewItem(v=>({...v, price: Number(e.target.value)}))}/>
             <input className="bg-white/10 px-3 py-2 rounded w-[320px]" placeholder="Image URL" value={newItem.imageUrl} onChange={e=>setNewItem(v=>({...v, imageUrl: e.target.value}))}/>
@@ -111,9 +128,36 @@ export default function AdminPage() {
       )}
 
       {tab==="store" && (
-        <div className="text-neutral-400">
-          Simple MVP: store reading list via `/api/store` (admin can add by POST).  
-          (Uploader can be added later — for now items use image URLs.)
+        <div className="space-y-4">
+          <div className="flex gap-2 items-center">
+            <select className="bg-white/10 px-3 py-2 rounded min-w-64" value={addStoreItemId} onChange={e=>setAddStoreItemId(e.target.value)}>
+              <option value="">Add item to store…</option>
+              {items.map(i=>(
+                <option key={i.id} value={i.id}>{i.name} — {i.price}</option>
+              ))}
+            </select>
+            <button onClick={storeAdd} className="px-3 py-2 bg-emerald-600 rounded">Add</button>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {store.map(s=>(
+              <div key={s.id} className="p-3 bg-white/5 rounded">
+                <div className="aspect-video rounded-lg overflow-hidden bg-white/10">
+                  {s.item.imageUrl ? <img src={s.item.imageUrl} className="w-full h-full object-cover" alt=""/> : null}
+                </div>
+                <div className="mt-2 font-medium">{s.item.name}</div>
+                <div className="text-sm text-neutral-400">{s.item.price} coins</div>
+                <div className="mt-2 flex gap-2">
+                  <button onClick={()=>storeToggle(s.id, !s.active)} className="px-3 py-1 rounded bg-white/10 hover:bg-white/20">
+                    {s.active ? "Disable" : "Enable"}
+                  </button>
+                  <button onClick={()=>storeDelete(s.id)} className="px-3 py-1 rounded bg-red-600 hover:bg-red-700">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
