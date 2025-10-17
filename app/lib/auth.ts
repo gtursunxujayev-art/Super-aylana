@@ -4,14 +4,12 @@ import { cookies as nextCookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 
 const COOKIE_NAME = 'sid'
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_key'
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me'
 
-// ----------------------------------------------------------
-// TOKEN HELPERS
-// ----------------------------------------------------------
-
-export function issueSid(uid: string): string {
-  return jwt.sign({ uid }, JWT_SECRET, { expiresIn: '7d' })
+// Create a short, signed session token for a user id
+export function issueSid(userId: string, maxAgeDays = 7): string {
+  const exp = Math.floor(Date.now() / 1000) + maxAgeDays * 24 * 60 * 60
+  return jwt.sign({ uid: userId, exp }, JWT_SECRET)
 }
 
 export function verifySid(token: string): { uid: string } | null {
@@ -22,87 +20,45 @@ export function verifySid(token: string): { uid: string } | null {
   }
 }
 
-// ----------------------------------------------------------
-// COOKIE HELPERS
-// ----------------------------------------------------------
+// Attach/clear the auth cookie and return JSON
+export function jsonWithAuthCookie<T extends object>(
+  body: T,
+  opts: { token?: string; maxAgeDays?: number } = {}
+) {
+  const res = NextResponse.json(body)
 
-export function setAuthCookie(res: NextResponse, token: string, maxAgeDays = 7) {
-  res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-    maxAge: maxAgeDays * 24 * 60 * 60,
-    path: '/',
-  })
-}
+  // If token is an empty string -> clear cookie
+  if (opts.token === '') {
+    res.cookies.set(COOKIE_NAME, '', {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 0,
+    })
+    return res
+  }
 
-export function clearAuthCookie(res: NextResponse) {
-  res.cookies.delete(COOKIE_NAME)
-}
+  // If token provided -> set/update cookie
+  if (typeof opts.token === 'string') {
+    const maxAge =
+      (opts.maxAgeDays ?? 7) * 24 * 60 * 60 // seconds
+    res.cookies.set(COOKIE_NAME, opts.token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/',
+      maxAge,
+    })
+  }
 
-// ----------------------------------------------------------
-// JSON + COOKIE RESPONSE
-// ----------------------------------------------------------
-
-export function jsonWithAuthCookie(
-  data: any,
-  opts?: { token?: string; maxAgeDays?: number }
-): NextResponse {
-  const res = NextResponse.json(data)
-  if (opts?.token) setAuthCookie(res, opts.token, opts.maxAgeDays)
-  if (opts?.token === '') clearAuthCookie(res)
   return res
 }
 
-// ----------------------------------------------------------
-// READ SESSION (For /api/auth/me etc.)
-// ----------------------------------------------------------
-
-export async function readSession() {
-  const cookieStore = nextCookies()
-  const token = cookieStore.get(COOKIE_NAME)?.value
+// Read current session in server context
+export async function readSession(): Promise<{ userId: string | null }> {
+  const token = nextCookies().get(COOKIE_NAME)?.value
   if (!token) return { userId: null }
   const payload = verifySid(token)
   return { userId: payload?.uid ?? null }
-}
-
-// ----------------------------------------------------------
-// UNIVERSAL COOKIE READER (Headers or cookies())
-// ----------------------------------------------------------
-
-export async function getUserIdFromCookie(
-  source?: Headers | ReturnType<typeof nextCookies>
-): Promise<string | null> {
-  if (!source) {
-    const c = nextCookies().get(COOKIE_NAME)?.value
-    if (!c) return null
-    const payload = verifySid(c)
-    return payload?.uid ?? null
-  }
-
-  // Case 1: next/headers cookies()
-  if ('get' in source && !('append' in source)) {
-    const token = source.get(COOKIE_NAME)?.value
-    if (!token) return null
-    const payload = verifySid(token)
-    return payload?.uid ?? null
-  }
-
-  // Case 2: Headers from Request
-  if (source instanceof Headers) {
-    const raw = source.get('cookie')
-    if (!raw) return null
-    const cookies = Object.fromEntries(
-      raw.split(';').map((c) => {
-        const [k, v] = c.trim().split('=')
-        return [k, decodeURIComponent(v || '')]
-      })
-    )
-    const token = cookies[COOKIE_NAME]
-    if (!token) return null
-    const payload = verifySid(token)
-    return payload?.uid ?? null
-  }
-
-  return null
 }
