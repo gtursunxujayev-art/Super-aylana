@@ -4,42 +4,30 @@ import bcrypt from 'bcryptjs'
 import { prisma } from '@/app/lib/prisma'
 import { issueSid, jsonWithAuthCookie } from '@/app/lib/auth'
 
-export const dynamic = 'force-dynamic'
-
 export async function POST(req: Request) {
-  const { username, password } = await req.json().catch(() => ({} as any))
+  const { username, password } = await req.json().catch(() => ({}))
 
   if (!username || !password) {
     return NextResponse.json(
-      { ok: false, error: 'Username va parol talab qilinadi.' },
+      { ok: false, error: 'Foydalanuvchi nomi va parol talab qilinadi.' },
       { status: 400 }
     )
   }
 
-  const existing = await prisma.user.findUnique({
-    where: { username: String(username) },
-  })
-  if (existing) {
+  const exists = await prisma.user.findUnique({ where: { username } })
+  if (exists) {
     return NextResponse.json(
-      { ok: false, error: 'Bu username band.' },
+      { ok: false, error: 'Bu foydalanuvchi nomi band.' },
       { status: 409 }
     )
   }
 
-  const passwordHash = await bcrypt.hash(String(password), 10)
-
+  const passwordHash = await bcrypt.hash(password, 10)
   const user = await prisma.user.create({
-    data: {
-      username: String(username),
-      passwordHash,
-    },
+    data: { username, passwordHash, balance: 0, isAdmin: false },
+    select: { id: true, username: true },
   })
 
-  // ✅ Pass plain string ID
-  const token = issueSid(user.id)
-
-  return jsonWithAuthCookie(
-    { ok: true, user: { id: user.id, username: user.username } },
-    { token }
-  )
+  const token = issueSid(user.id, 7)
+  return jsonWithAuthCookie({ ok: true, user }, { token })
 }
