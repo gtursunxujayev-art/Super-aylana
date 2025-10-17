@@ -1,23 +1,25 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/app/lib/prisma'
 import bcrypt from 'bcryptjs'
+import { issueSid, jsonWithAuthCookie } from '@/app/lib/auth'
 
 export async function POST(req: Request) {
-  const { username, password } = await req.json()
+  const { username, password } = await req.json().catch(() => ({}))
 
   if (!username || !password) {
-    return NextResponse.json({ ok: false, error: 'REQUIRED' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: 'Barcha maydonlarni to‘ldiring.' }, { status: 400 })
   }
 
-  const exists = await prisma.user.findFirst({ where: { username } })
-  if (exists) {
-    return NextResponse.json({ ok: false, error: 'TAKEN' }, { status: 409 })
+  const existing = await prisma.user.findUnique({ where: { username } })
+  if (existing) {
+    return NextResponse.json({ ok: false, error: 'Bu foydalanuvchi nomi band.' }, { status: 400 })
   }
 
-  const passwordHash = await bcrypt.hash(password, 10)
-  await prisma.user.create({
-    data: { username, passwordHash, isAdmin: false },
+  const hash = await bcrypt.hash(password, 10)
+  const user = await prisma.user.create({
+    data: { username, password: hash, balance: 0, isAdmin: false },
   })
 
-  return NextResponse.json({ ok: true })
+  const token = issueSid(user.id)
+  return jsonWithAuthCookie({ ok: true, user: { id: user.id, username: user.username } }, token)
 }
