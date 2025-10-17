@@ -5,16 +5,32 @@ type Me = { id: string; name: string; balance: number; role: string };
 type Popup = { user: string; prize: string; imageUrl?: string | null };
 type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item"|"another" };
 
+// Helpers to build pie-slice paths
+function deg2rad(d: number) { return (d * Math.PI) / 180; }
+function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
+  const a = deg2rad(angleDeg);
+  return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+}
+function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: number) {
+  const start = polarToCartesian(cx, cy, r, startDeg);
+  const end = polarToCartesian(cx, cy, r, endDeg);
+  const largeArc = endDeg - startDeg <= 180 ? 0 : 1;
+  // Move to center, line to start, arc to end, close
+  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+}
+
 export default function WheelPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [mode, setMode] = useState<50|100|200>(100);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [spinning, setSpinning] = useState(false);
   const [popup, setPopup] = useState<Popup | null>(null);
+
   const wheelRef = useRef<HTMLDivElement>(null);
 
   async function loadMe() {
-    const r = await fetch("/api/me"); if (r.ok) setMe(await r.json());
+    const r = await fetch("/api/me");
+    if (r.ok) setMe(await r.json());
   }
   async function loadEntries(m: 50|100|200) {
     const r = await fetch(`/api/wheel?mode=${m}`);
@@ -24,7 +40,7 @@ export default function WheelPage() {
   useEffect(()=>{ loadMe(); }, []);
   useEffect(()=>{ loadEntries(mode); }, [mode]);
 
-  // global popup polling
+  // global popup polling (everyone sees result)
   useEffect(()=>{
     const t = setInterval(async ()=>{
       const r = await fetch("/api/spin/state");
@@ -52,6 +68,7 @@ export default function WheelPage() {
     }
 
     const j = await r.json();
+    // Spin animation (purely visual, server already chose the result)
     const deg = 360 * 8 + Math.floor(Math.random() * 360);
     if (wheelRef.current) {
       wheelRef.current.style.transition = `transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`;
@@ -69,11 +86,17 @@ export default function WheelPage() {
     }, j.spinMs);
   }
 
-  const sliceCount = entries.length || 8;
-  const sliceAngle = 360 / sliceCount;
+  // Visual config
+  const size = 440;            // SVG size (px)
+  const cx = size/2, cy = size/2;
+  const radius = size/2 - 6;   // radius with border space
+  const count = Math.max(6, entries.length || 8);
+  const sliceAngle = 360 / count;
+
+  // Nice repeating colors for cake slices
   const colors = [
-    "#F87171", "#60A5FA", "#34D399", "#FBBF24",
-    "#A78BFA", "#F472B6", "#22D3EE", "#4ADE80"
+    "#06b6d4","#f59e0b","#22c55e","#60a5fa",
+    "#f472b6","#a78bfa","#fb7185","#34d399"
   ];
 
   return (
@@ -88,37 +111,69 @@ export default function WheelPage() {
         ))}
       </div>
 
-      {/* WHEEL */}
-      <div className="relative mt-4">
-        {/* Pointer */}
+      {/* Wheel container */}
+      <div className="relative mt-2">
+        {/* Pointer (triangle) */}
         <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[14px] border-r-[14px] border-b-[28px] border-l-transparent border-r-transparent border-b-yellow-400 drop-shadow" />
 
-        <div className="relative w-[420px] h-[420px] rounded-full border-4 border-white/20 bg-neutral-950 overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)]">
-          <div ref={wheelRef} className="absolute inset-0 rounded-full transition-transform">
-            {entries.map((e, i) => {
-              const rotate = sliceAngle * i;
-              const color = colors[i % colors.length];
-              return (
-                <div key={i} className="absolute left-1/2 bottom-1/2 origin-bottom-left"
-                  style={{
-                    width: "50%", height: "50%",
-                    transform: `rotate(${rotate}deg) skewY(${90 - sliceAngle}deg)`,
-                    background: `linear-gradient(135deg, ${color} 0%, ${color}99 100%)`
-                  }}>
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 origin-left rotate-[90deg] text-xs text-center text-white font-semibold tracking-wide"
-                    style={{
-                      transform: `skewY(-${90 - sliceAngle}deg) rotate(${sliceAngle/2}deg) translateX(60px)`
-                    }}>
-                    {e.name}
-                  </div>
-                </div>
-              );
-            })}
+        {/* Outer ring */}
+        <div className="relative w-[460px] h-[460px] rounded-full bg-neutral-900 border-4 border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.5)] overflow-hidden">
+          {/* Spinning group */}
+          <div ref={wheelRef} className="absolute inset-0 will-change-transform">
+            <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%" className="block">
+              {/* subtle radial shine */}
+              <defs>
+                <radialGradient id="shine" cx="50%" cy="50%" r="60%">
+                  <stop offset="0%" stopColor="rgba(255,255,255,0.08)" />
+                  <stop offset="70%" stopColor="rgba(255,255,255,0.02)" />
+                  <stop offset="100%" stopColor="rgba(255,255,255,0.00)" />
+                </radialGradient>
+              </defs>
+
+              {/* slices */}
+              {Array.from({ length: count }).map((_, i) => {
+                const label = entries[i % (entries.length || 1)];
+                const start = i * sliceAngle - 90;           // start at top (−90°)
+                const end = start + sliceAngle;
+                const path = arcPath(cx, cy, radius, start, end);
+                const mid = (start + end) / 2;
+                const textR = radius * 0.62;
+                const pos = polarToCartesian(cx, cy, textR, mid);
+                const fill = colors[i % colors.length];
+
+                return (
+                  <g key={i}>
+                    {/* sector */}
+                    <path d={path}
+                          fill={fill}
+                          stroke="#0a0a0a"
+                          strokeWidth={2}
+                    />
+                    {/* label (cake-style, upright) */}
+                    <text
+                      x={pos.x}
+                      y={pos.y}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      fontSize={12}
+                      className="fill-white"
+                      transform={`rotate(${mid+90}, ${pos.x}, ${pos.y})`}
+                      style={{ userSelect: "none" }}
+                    >
+                      {label ? label.name : "Prize"}
+                    </text>
+                  </g>
+                );
+              })}
+
+              {/* glossy overlay */}
+              <circle cx={cx} cy={cy} r={radius} fill="url(#shine)" />
+            </svg>
           </div>
 
-          {/* center circle */}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-24 h-24 rounded-full bg-neutral-900 border border-white/10 shadow-inner flex items-center justify-center text-sm text-neutral-400">
+          {/* center hub */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-24 h-24 rounded-full bg-neutral-950 border border-white/10 shadow-inner flex items-center justify-center text-xs text-neutral-300">
               Super Aylana
             </div>
           </div>
@@ -128,14 +183,16 @@ export default function WheelPage() {
       {/* Balance + Spin */}
       <div className="flex items-center gap-4">
         <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
-        <button disabled={spinning}
+        <button
+          disabled={spinning}
           onClick={spin}
-          className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold">
+          className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold"
+        >
           {spinning ? "Aylanyapti..." : `Spin (${mode})`}
         </button>
       </div>
 
-      {/* Popup */}
+      {/* Global popup */}
       {popup && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center" onClick={()=>setPopup(null)}>
           <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
