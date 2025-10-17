@@ -1,6 +1,6 @@
 // app/lib/auth.ts
 import jwt from 'jsonwebtoken'
-import { cookies, type ReadonlyRequestCookies } from 'next/headers'
+import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 
 const COOKIE_NAME = 'sid'
@@ -56,25 +56,31 @@ export async function readSession(): Promise<{ uid: string } | null> {
 
 /**
  * Extract userId (uid) from either:
- *  - a `ReadonlyRequestCookies` (preferred), or
- *  - a `Headers` object (fallback from Route Handlers), or
- *  - if nothing passed, from `cookies()`.
+ *  - a cookies-like object (has `.get()` that returns a cookie value),
+ *  - a `Headers` object (from Route Handlers),
+ *  - or, if nothing passed, from `cookies()`.
+ *
+ * We avoid importing Next’s internal cookie types to keep compatibility with 14.x.
  */
 export async function getUserIdFromCookie(
-  source?: ReadonlyRequestCookies | Headers
+  source?: unknown // Headers | cookies-like
 ): Promise<string | null> {
   try {
     let token: string | undefined
 
-    // If it's a cookies-like object (has .get returning a cookie)
-    if (source && 'get' in source) {
-      const cookieVal = (source as ReadonlyRequestCookies).get(COOKIE_NAME)?.value
-      token = cookieVal
-    } else if (source instanceof Headers) {
+    // cookies-like (duck type: has a .get function)
+    if (source && typeof source === 'object' && 'get' in (source as any)) {
+      const v = (source as any).get(COOKIE_NAME)
+      token = typeof v === 'string' ? v : v?.value
+    }
+    // Headers instance
+    else if (source instanceof Headers) {
       const cookieHeader = source.get('cookie') || source.get('Cookie') || ''
       const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`))
       token = match?.[1]
-    } else {
+    }
+    // fallback to Next cookies()
+    else {
       token = cookies().get(COOKIE_NAME)?.value
     }
 
