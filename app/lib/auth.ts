@@ -1,25 +1,55 @@
-// app/lib/auth.ts
+import { cookies as nextCookies, type ReadonlyRequestCookies } from 'next/headers'
 import jwt from 'jsonwebtoken'
-import { cookies, headers as nextHeaders } from 'next/headers'
 import { NextResponse } from 'next/server'
 
 const COOKIE_NAME = 'sid'
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
 
-// ------------------------------------------------------------------
-// Token helpers
-// ------------------------------------------------------------------
-export function issueSid(userId: string) {
-  // 30 days
-  return jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '30d' })
-}
-
-export function verifySid(token: string): { uid: string } | null {
+// Existing verifySid remains the same
+function verifySid(token: string): { uid: string } | null {
   try {
     return jwt.verify(token, JWT_SECRET) as { uid: string }
   } catch {
     return null
   }
+}
+
+// ✅ Replace this whole function:
+export async function getUserIdFromCookie(
+  source?: Headers | ReadonlyRequestCookies
+): Promise<string | null> {
+  // Case 1: When no argument, use cookies() (e.g., in server components)
+  if (!source) {
+    const c = nextCookies().get(COOKIE_NAME)?.value
+    if (!c) return null
+    const payload = verifySid(c)
+    return payload?.uid ?? null
+  }
+
+  // Case 2: Called with ReadonlyRequestCookies
+  if ('get' in source && !('append' in source)) {
+    const token = source.get(COOKIE_NAME)?.value
+    if (!token) return null
+    const payload = verifySid(token)
+    return payload?.uid ?? null
+  }
+
+  // Case 3: Called with Headers
+  if (source instanceof Headers) {
+    const raw = source.get('cookie')
+    if (!raw) return null
+    const cookies = raw.split(';').reduce((acc, c) => {
+      const [k, v] = c.trim().split('=')
+      if (k) acc[k] = decodeURIComponent(v || '')
+      return acc
+    }, {} as Record<string, string>)
+    const token = cookies[COOKIE_NAME]
+    if (!token) return null
+    const payload = verifySid(token)
+    return payload?.uid ?? null
+  }
+
+  return null
 }
 
 // ------------------------------------------------------------------
