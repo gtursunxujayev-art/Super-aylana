@@ -34,8 +34,8 @@ export function jsonWithAuthCookie<T>(data: T, token: string) {
     name: COOKIE_NAME,
     value: token,
     httpOnly: true,
-    sameSite: 'lax',
-    secure: true,
+    sameSite: 'none', // ✅ required for cross-domain HTTPS cookies
+secure: true,     // ✅ required for sameSite=none
     path: '/',
     maxAge: token ? 60 * 60 * 24 * 30 : 0,
   })
