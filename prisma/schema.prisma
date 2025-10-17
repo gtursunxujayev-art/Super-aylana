@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tgid      String   @unique
+  login     String   @unique
+  name      String
+  password  String
+  role      Role     @default(USER)
+  balance   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rewards   Reward[]
+  txns      CoinTxn[]
+}
+
+model Item {
+  id        String   @id @default(cuid())
+  name      String
+  price     Int
+  imageUrl  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rewards   Reward[]
+  stores    StoreItem[]
+}
+
+model Reward {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  item      Item?    @relation(fields: [itemId], references: [id])
+  itemId    String?
+  mode      Int
+  result    String   // item name or "another_spin"
+  imageUrl  String?
+  createdAt DateTime @default(now())
+}
+
+model StoreItem {
+  id        String   @id @default(cuid())
+  item      Item     @relation(fields: [itemId], references: [id])
+  itemId    String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model CoinTxn {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  delta     Int
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+enum Role {
+  USER
+  ADMIN
+}
