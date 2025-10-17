@@ -1,41 +1,44 @@
+// app/api/auth/register/route.ts
 import { NextResponse } from 'next/server'
-import { prisma } from '@/app/lib/prisma'
 import bcrypt from 'bcryptjs'
+import { prisma } from '@/app/lib/prisma'
 import { issueSid, jsonWithAuthCookie } from '@/app/lib/auth'
+
+export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
   const { username, password } = await req.json().catch(() => ({} as any))
 
   if (!username || !password) {
     return NextResponse.json(
-      { ok: false, error: 'Barcha maydonlarni to‘ldiring.' },
+      { ok: false, error: 'Username va parol talab qilinadi.' },
       { status: 400 }
     )
   }
 
-  const existing = await prisma.user.findUnique({ where: { username } })
+  const existing = await prisma.user.findUnique({
+    where: { username: String(username) },
+  })
   if (existing) {
     return NextResponse.json(
-      { ok: false, error: 'Bu foydalanuvchi nomi band.' },
-      { status: 400 }
+      { ok: false, error: 'Bu username band.' },
+      { status: 409 }
     )
   }
 
-  const passwordHash = await bcrypt.hash(password, 10)
+  const passwordHash = await bcrypt.hash(String(password), 10)
 
   const user = await prisma.user.create({
     data: {
-      username,
-      passwordHash,          // ✅ store hashed password
-      balance: 0,
-      isAdmin: false,
-      visible: true,
-      tgId: '',              // if your schema requires it; adjust if optional
+      username: String(username),
+      passwordHash,
     },
   })
 
-  const token = issueSid(user.id)
+  const token = issueSid({ uid: user.id })
+
   return jsonWithAuthCookie(
-  { ok: true, user: { id: user.id, username: user.username } },
-  { token }
-)
+    { ok: true, user: { id: user.id, username: user.username } },
+    { token } // pass as object
+  )
+}
