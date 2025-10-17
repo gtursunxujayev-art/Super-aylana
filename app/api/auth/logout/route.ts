@@ -1,6 +1,11 @@
 import { jsonWithAuthCookie } from '@/app/lib/auth'
 
+export const dynamic = 'force-dynamic'
+
 export async function POST() {
-  // Passing '' clears the cookie
-  return jsonWithAuthCookie({ ok: true }, '')
+  // Clear the cookie by sending an empty token and 0-day maxAge
+  return jsonWithAuthCookie(
+    { ok: true },
+    { token: '', maxAgeDays: 0 }
+  )
 }
