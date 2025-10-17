@@ -1,113 +1,87 @@
 // app/lib/auth.ts
 import jwt from 'jsonwebtoken'
 import { cookies, type ReadonlyRequestCookies } from 'next/headers'
-import type { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 
-// ----- config -----
 const COOKIE_NAME = 'sid'
-const MAX_AGE_SECONDS = 60 * 60 * 24 * 7 // 7 days
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me'
 
-function getSecret(): string {
-  const s = process.env.JWT_SECRET
-  if (!s) {
-    throw new Error('JWT_SECRET is not set')
-  }
-  return s
+// --- token helpers -----------------------------------------------------------
+
+export function issueSid(userId: string) {
+  return jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '30d' })
 }
 
-// Small cookie parser for plain Headers case
-function parseCookieHeader(header: string | null): Record<string, string> {
-  const map: Record<string, string> = {}
-  if (!header) return map
-  header.split(';').forEach((part) => {
-    const [k, ...rest] = part.trim().split('=')
-    if (!k) return
-    map[k] = decodeURIComponent(rest.join('=') || '')
-  })
-  return map
-}
-
-// Create a signed JWT with user id as subject
-export function issueSid(userId: string): string {
-  return jwt.sign({ sub: userId }, getSecret(), { expiresIn: `${MAX_AGE_SECONDS}s` })
-}
-
-// Verify JWT and return user id or null
-export function verifySid(token: string | undefined | null): string | null {
-  if (!token) return null
+function verifySid(token: string): { uid: string } | null {
   try {
-    const payload = jwt.verify(token, getSecret()) as { sub?: string }
-    return payload?.sub ?? null
+    const payload = jwt.verify(token, JWT_SECRET) as { uid: string }
+    if (!payload?.uid) return null
+    return payload
   } catch {
     return null
   }
 }
 
 /**
- * Read the current user id from:
- *  - next/headers cookies()   (when called in server components/route handlers)
- *  - or a plain Headers object (when called with req.headers)
+ * Attach/clear auth cookie on a JSON response.
+ * Pass a non-empty token to set, or '' to clear.
  */
-export function getUserIdFromCookie(
-  source?: ReadonlyRequestCookies | Headers | null
-): string | null {
+export function jsonWithAuthCookie<T>(data: T, token: string) {
+  const res = NextResponse.json(data)
+
+  // Clear if token === '' (maxAge 0). Otherwise set for 30 days.
+  res.cookies.set({
+    name: COOKIE_NAME,
+    value: token,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true,
+    path: '/',
+    maxAge: token ? 60 * 60 * 24 * 30 : 0,
+  })
+
+  return res
+}
+
+/**
+ * Read session from the current request cookies() store.
+ * Returns `{ uid }` or `null`.
+ */
+export async function readSession(): Promise<{ uid: string } | null> {
+  const token = cookies().get(COOKIE_NAME)?.value
+  if (!token) return null
+  const payload = verifySid(token)
+  return payload ? { uid: payload.uid } : null
+}
+
+/**
+ * Extract userId (uid) from either:
+ *  - a `ReadonlyRequestCookies` (preferred), or
+ *  - a `Headers` object (fallback from Route Handlers), or
+ *  - if nothing passed, from `cookies()`.
+ */
+export async function getUserIdFromCookie(
+  source?: ReadonlyRequestCookies | Headers
+): Promise<string | null> {
   try {
-    // Case 1: source not provided → use cookies() API
-    if (!source) {
-      const token = cookies().get(COOKIE_NAME)?.value
-      return verifySid(token)
+    let token: string | undefined
+
+    // If it's a cookies-like object (has .get returning a cookie)
+    if (source && 'get' in source) {
+      const cookieVal = (source as ReadonlyRequestCookies).get(COOKIE_NAME)?.value
+      token = cookieVal
+    } else if (source instanceof Headers) {
+      const cookieHeader = source.get('cookie') || source.get('Cookie') || ''
+      const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([^;]+)`))
+      token = match?.[1]
+    } else {
+      token = cookies().get(COOKIE_NAME)?.value
     }
 
-    // Case 2: Headers object
-    if (typeof (source as Headers).get === 'function') {
-      const token = parseCookieHeader((source as Headers).get('cookie'))[COOKIE_NAME]
-      return verifySid(token)
-    }
-
-    // Case 3: Next's RequestCookies
-    const token = (source as ReadonlyRequestCookies).get(COOKIE_NAME)?.value
-    return verifySid(token)
+    if (!token) return null
+    const payload = verifySid(token)
+    return payload?.uid ?? null
   } catch {
     return null
   }
-}
-
-// Attach the auth cookie to a JSON response (helper)
-export function jsonWithAuthCookie<T extends object>(
-  body: T,
-  userId: string,
-  init?: ResponseInit
-) {
-  const token = issueSid(userId)
-
-  // Create a plain Response and set cookie header manually to keep it framework-agnostic
-  const res = new Response(JSON.stringify(body), {
-    ...(init || {}),
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      ...(init?.headers || {}),
-      // one Set-Cookie here; Vercel/Next will merge correctly
-      'set-cookie': `${COOKIE_NAME}=${encodeURIComponent(
-        token
-      )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${MAX_AGE_SECONDS}; ${
-        process.env.NODE_ENV === 'production' ? 'Secure; ' : ''
-      }`,
-    },
-  })
-  return res
-}
-
-// Clear the cookie (useful for /logout)
-export function jsonClearAuthCookie<T extends object>(body: T, init?: ResponseInit) {
-  const res = new Response(JSON.stringify(body), {
-    ...(init || {}),
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      ...(init?.headers || {}),
-      'set-cookie': `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; ${
-        process.env.NODE_ENV === 'production' ? 'Secure; ' : ''
-      }`,
-    },
-  })
-  return res
 }
