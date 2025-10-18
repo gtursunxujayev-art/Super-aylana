@@ -26,10 +26,14 @@ export default function WheelPage(){
   const rot=useRef(0);
   const ticker=useRef<any>(null);
 
-  // Global spin state mirrors Redis
+  // global state mirrors Redis
   const globalSpinId=useRef<string|null>(null);
   const banner=useRef<{by:string|null,mode:number|null}>({by:null,mode:null});
   const lastPopupKey=useRef<string>("");
+
+  // handshake guard to avoid early stop
+  const pendingSpin=useRef(false);
+  const pendingSince=useRef(0);
 
   async function loadMe(){const r=await fetch("/api/me",{cache:"no-store"}); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`,{cache:"no-store"}); if(r.ok) setEntries(await r.json());}
@@ -74,47 +78,67 @@ export default function WheelPage(){
         const r=await fetch("/api/spin/state",{cache:"no-store"});
         if(!r.ok) return;
         const data = await r.json();
-        // support both shapes: { state, lastPopup } OR legacy {status, lastPopup}
+        // supports both shapes: { state, lastPopup } or legacy flat
         const state = data?.state ?? { status: data?.status, spinId: data?.spinId, by: data?.by, mode: data?.mode };
         const lastPopup = data?.lastPopup ?? data?.popup ?? null;
 
+        // If we clicked recently, allow a small grace period where we DON'T stop ticker,
+        // even if state is still IDLE (server not yet updated).
+        if (pendingSpin.current && Date.now() - pendingSince.current > 4000) {
+          // after 4s with no SPINNING, cancel the pending visual
+          pendingSpin.current = false;
+          banner.current = { by: null, mode: null };
+          stopTicker();
+        }
+
         if (state?.status==="SPINNING" && state.spinId){
+          // got global confirmation -> clear pending guard
+          pendingSpin.current = false;
+
           if (globalSpinId.current !== state.spinId){
-            // NEW GLOBAL SPIN: set banner, lock mode (visual), and start smooth ticker
+            // NEW spin appeared globally
             globalSpinId.current = state.spinId;
             banner.current = { by: state.by ?? null, mode: state.mode ?? null };
             if (state.mode && state.mode !== mode) { setMode(state.mode); await loadEntries(state.mode); }
-            ensureTicker();
+            ensureTicker();  // make sure we're rotating
           } else {
             // keep banner fresh
             banner.current = { by: state.by ?? null, mode: state.mode ?? null };
           }
         } else {
-          // no active spin (could be right after popup), don’t force-stop ticker until we see popup
-          if (!lastPopup) { banner.current = { by: null, mode: null }; stopTicker(); }
+          // IDLE path: only stop ticker if we are NOT waiting for server confirm
+          if (!pendingSpin.current && !lastPopup) {
+            banner.current = { by: null, mode: null };
+            stopTicker();
+          }
         }
 
-        // result arrives?
+        // result arrives globally?
         if (lastPopup?.spinId && lastPopup.spinId === globalSpinId.current){
+          pendingSpin.current = false;
           stopTicker();
           await animateToPrize(lastPopup.prize, lastPopup.mode);
           showPopupOnce(lastPopup);
           banner.current = { by: null, mode: null };
           await loadWins(); await loadMe();
+          // keep globalSpinId until a new spin starts; harmless
         }
       }catch{}
-      if (!stop) setTimeout(tick, 500);
+      if (!stop) setTimeout(tick, 450);
     };
     tick();
     return ()=>{ stop=true; stopTicker(); };
   },[mode, entries.length]);
 
-  /* ---------- SSE (faster reaction; polling still covers everything) ---------- */
+  /* ---------- SSE (fast path; polling still covers everything) ---------- */
   useEffect(()=>{
     const es = new EventSource("/api/spin/stream");
     es.addEventListener("SPIN_START", async (e:any)=>{
       const s = JSON.parse(e.data); // {spinId,by,mode}
       if (!s?.spinId) return;
+      // on SSE start we know server has confirmed -> clear pending
+      pendingSpin.current = false;
+
       if (globalSpinId.current !== s.spinId){
         globalSpinId.current = s.spinId;
         banner.current = { by: s.by ?? null, mode: s.mode ?? null };
@@ -129,6 +153,7 @@ export default function WheelPage(){
       const p: Popup | undefined = d?.popup;
       if (!p?.spinId) return;
       if (p.spinId === globalSpinId.current){
+        pendingSpin.current = false;
         stopTicker();
         await animateToPrize(p.prize, p.mode);
         showPopupOnce(p);
@@ -141,12 +166,16 @@ export default function WheelPage(){
     return ()=>{ es.close(); };
   },[mode, entries.length]);
 
-  /* ---------- LOCAL SPIN (FIX: start ticker immediately here) ---------- */
+  /* ---------- LOCAL SPIN: start ticker immediately & set pending guard ---------- */
   async function spin(){
-    // Start the visual rotation immediately so it never feels stuck
+    // visual start
     ensureTicker();
-    // Show your name in the banner instantly (global state will overwrite shortly)
+    // show your name in the reserved banner space immediately
     if (me?.name) banner.current = { by: me.name, mode };
+
+    // handshake guard
+    pendingSpin.current = true;
+    pendingSince.current = Date.now();
 
     const r=await fetch("/api/spin/start",{
       method:"POST",
@@ -155,15 +184,16 @@ export default function WheelPage(){
     });
 
     if(!r.ok){
-      stopTicker(); // revert if server refused
+      // server refused: cancel visuals
+      pendingSpin.current = false;
+      banner.current = { by: null, mode: null };
+      stopTicker();
       const j=await r.json().catch(()=>({}));
       alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
       return;
     }
 
-    // We intentionally do NOT snap here.
-    // Everyone (including the spinner) will stop & snap when the matching popup arrives.
-    // This keeps all tabs perfectly in sync.
+    // do not snap locally; we’ll stop & snap when global popup arrives (keeps tabs in sync)
   }
 
   /* ---------- Visuals ---------- */
