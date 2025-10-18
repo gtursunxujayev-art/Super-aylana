@@ -22,17 +22,18 @@ function readCurrentDeg(el: HTMLElement){
   const [aStr,bStr] = m[1].split(",").map(s=>s.trim());
   const a = parseFloat(aStr), b = parseFloat(bStr);
   const angle = Math.atan2(b, a) * 180 / Math.PI;
-  return (Math.round(angle) + 360) % 360;
+  return (angle + 360) % 360;
 }
 
-/** Degrees to land pointer at center of sliceIndex (add 2 full turns for “satisfying” stop) */
+/** Extra degrees to land pointer on center of sliceIndex (add 2 full turns) */
 function deltaToCenterFrom(currentDeg:number, sliceIndex:number, total:number){
   const slice = 360/total;
   const center = sliceIndex*slice + slice/2;
   const mod = ((-center - currentDeg) % 360 + 360) % 360;
-  return 720 + mod;
+  return 720 + mod; // 2 full rotations + alignment
 }
 
+/* ========== Component ========== */
 export default function WheelPage(){
   /* ---------- Data ---------- */
   const [me,setMe]=useState<Me|null>(null);
@@ -41,19 +42,23 @@ export default function WheelPage(){
   const [wins,setWins]=useState<Win[]>([]);
   const [popup,setPopup]=useState<Popup|null>(null);
 
-  /* ---------- UI state ---------- */
-  const [spinning,setSpinning]=useState(false);     // button state
+  /* ---------- UI/Global state ---------- */
+  const [spinning,setSpinning]=useState(false);
   const [banner,setBanner]=useState<string|null>(null); // “X aylantiryapti…”
-
-  /* ---------- Global spin tracking ---------- */
   const currentSpinId=useRef<string|null>(null);
-  const startedAt=useRef<number|null>(null);  // ms epoch from server
-  const resultRef=useRef<Popup|null>(null);   // store result until animation finishes
+  const startedAt=useRef<number|null>(null);
 
-  /* ---------- DOM ---------- */
+  // Wheel element & snapshot of entries AT SPIN START
   const wheelRef=useRef<HTMLDivElement>(null);
+  const entriesAtSpinRef=useRef<Entry[]>([]);
 
-  /* ---------- Data loaders ---------- */
+  // Result to show after animation (never lost even if event fires early)
+  const resultRef=useRef<Popup|null>(null);
+
+  // A guard preventing double-finalization
+  const finishedRef=useRef(false);
+
+  /* ---------- Loaders ---------- */
   async function loadMe(){const r=await fetch("/api/me",{cache:"no-store"}); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`,{cache:"no-store"}); if(r.ok) setEntries(await r.json());}
   async function loadWins(){const r=await fetch("/api/recent-wins",{cache:"no-store"}); if(r.ok) setWins(await r.json());}
@@ -61,59 +66,69 @@ export default function WheelPage(){
   useEffect(()=>{ loadMe(); loadWins(); },[]);
   useEffect(()=>{ loadEntries(mode); },[mode]);
 
-  /* ---------- Wheel visual helpers ---------- */
+  /* ---------- Wheel helpers ---------- */
+  function forceReflow(el: HTMLElement){ void el.offsetHeight; }
+
   function resetWheelTo(deg:number){
-    if (!wheelRef.current) return;
-    const el=wheelRef.current;
+    const el=wheelRef.current; if(!el) return;
     el.style.animation="none";
     el.style.transition="none";
     el.style.transform=`rotate(${deg}deg)`;
-    // force reflow so next transition definitely runs
-    void el.offsetHeight;
+    forceReflow(el);
   }
 
-  /** Start the WAITING phase: constant rotation while we wait for the server’s result */
   function startWaitingSpin(){
-    if (!wheelRef.current) return;
-    const el=wheelRef.current;
+    const el=wheelRef.current; if(!el) return;
     el.style.transition="none";
     el.style.animation="spinLinear 900ms linear infinite";
   }
 
-  /** Finish: stop animation and ease-out to the exact winning slice center */
+  /** Finish: freeze, compute target, ease to it, guarantee cleanup */
   function finishToPrize(p: Popup, totalMsTarget=10000){
-    if (!wheelRef.current) return;
-    const el = wheelRef.current;
+    const el=wheelRef.current; if(!el) return;
+    if (finishedRef.current) return;
+    finishedRef.current = true;
 
-    // read current angle WHILE animation is still on
+    // read current angle WHILE animation is on
     const current = readCurrentDeg(el);
-
-    // stop animation & freeze at “current”
+    // stop animation and freeze at current
     resetWheelTo(current);
 
     // compute remaining time so total ≈ totalMsTarget
     const now = Date.now();
     const elapsed = startedAt.current ? Math.max(0, now - startedAt.current) : 0;
-    const remaining = Math.max(1200, Math.min(4500, totalMsTarget - elapsed)); // 1.2s..4.5s
+    const remaining = Math.max(1200, Math.min(4500, totalMsTarget - elapsed)); // 1.2–4.5s
 
-    // find slice index
-    const total = Math.max(8, entries.length || 8);
-    const idx = Math.max(0, entries.findIndex(e => e.name === p.prize || (p.prize.includes("Yana") && e.kind==="another")));
-    const finalDeg = current + deltaToCenterFrom(current, idx, total);
+    // pick from snapshot taken at SPIN_START
+    const list = entriesAtSpinRef.current.length ? entriesAtSpinRef.current : entries;
+    const total = Math.max(8, list.length || 8);
+    let idx = list.findIndex(e => e.name === p.prize || (p.prize.includes("Yana") && e.kind==="another"));
+    if (idx < 0) idx = 0;
 
-    // ease-out to final
+    // compute final angle (ensure at least small delta so transition fires)
+    let delta = deltaToCenterFrom(current, idx, total);
+    if (delta < 1) delta += 360; // add one extra turn to guarantee visible motion
+    const finalDeg = current + delta;
+
+    // run the ease-out
     el.style.transition = `transform ${remaining}ms cubic-bezier(.12,.9,.18,1)`;
     el.style.transform  = `rotate(${finalDeg}deg)`;
 
-    // when transition ends → show popup & restore button
-    const onEnd = () => {
+    // Guaranteed finalize: transitionend + timeout fallback
+    const finalize = ()=>{
       el.removeEventListener('transitionend', onEnd);
+      // normalize rotation (keep 0..359) to avoid accumulated huge angles
+      const normalized = ((finalDeg % 360) + 360) % 360;
+      resetWheelTo(normalized);
+
       setSpinning(false);
       setBanner(null);
-      setPopup(resultRef.current); // guaranteed to show
+      setPopup(resultRef.current);
       resultRef.current = null;
     };
+    const onEnd = ()=> finalize();
     el.addEventListener('transitionend', onEnd, { once: true });
+    setTimeout(finalize, remaining + 80);
   }
 
   /* ---------- Polling (authoritative) ---------- */
@@ -125,14 +140,21 @@ export default function WheelPage(){
         if(!r.ok) return;
         const data=await r.json();
         const state = data?.state ?? { status: data?.status, spinId: data?.spinId, by: data?.by, mode: data?.mode, startedAt: data?.startedAt };
-        const lastPopup: Popup | null = data?.lastPopup ?? null;
+        const lastPopup: Popup | null = data?.lastPopup ?? data?.popup ?? null;
 
         if (state?.status === "SPINNING" && state.spinId){
           setSpinning(true);
           setBanner(state.by ?? null);
           startedAt.current = state.startedAt ?? Date.now();
+
           if (currentSpinId.current !== state.spinId){
+            // NEW spin started globally
             currentSpinId.current = state.spinId;
+            finishedRef.current = false;
+
+            // capture the entries used for THIS spin (don’t change during flight)
+            entriesAtSpinRef.current = entries.slice();
+
             resetWheelTo(0);
             startWaitingSpin();
             if (state.mode && state.mode !== mode) setMode(state.mode);
@@ -150,7 +172,7 @@ export default function WheelPage(){
     };
     tick();
     return ()=>{ stop=true; };
-  },[entries.length, mode]);
+  },[entries, mode]);
 
   /* ---------- SSE (fast path) ---------- */
   useEffect(()=>{
@@ -159,12 +181,16 @@ export default function WheelPage(){
     es.addEventListener("SPIN_START", (e:any)=>{
       const s = JSON.parse(e.data); // {spinId,by,mode,startedAt}
       if(!s?.spinId) return;
+
       setSpinning(true);
       setBanner(s.by ?? null);
       startedAt.current = s.startedAt ?? Date.now();
 
       if (currentSpinId.current !== s.spinId){
         currentSpinId.current = s.spinId;
+        finishedRef.current = false;
+        entriesAtSpinRef.current = entries.slice();
+
         resetWheelTo(0);
         startWaitingSpin();
         if (s.mode && s.mode !== mode) setMode(s.mode);
@@ -186,7 +212,7 @@ export default function WheelPage(){
     es.addEventListener("ping", ()=>{});
     es.onerror = () => {};
     return ()=> es.close();
-  },[entries.length, mode]);
+  },[entries, mode]);
 
   /* ---------- Local click ---------- */
   async function spin(){
@@ -194,6 +220,9 @@ export default function WheelPage(){
     setSpinning(true);
     setBanner(me?.name ?? null);
     startedAt.current = Date.now();
+    finishedRef.current = false;
+    entriesAtSpinRef.current = entries.slice();
+
     resetWheelTo(0);
     startWaitingSpin();
 
@@ -322,7 +351,7 @@ export default function WheelPage(){
         </div>
       </div>
 
-      {/* Global popup (appears exactly on transition end) */}
+      {/* Popup (guaranteed after stop) */}
       {popup && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={()=>setPopup(null)}>
           <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
