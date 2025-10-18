@@ -25,36 +25,35 @@ function readCurrentDeg(el: HTMLElement){
   return (Math.round(angle) + 360) % 360;
 }
 
-/** Extra degrees needed to land the pointer on the center of sliceIndex */
+/** Degrees to land pointer at center of sliceIndex (add 2 full turns for “satisfying” stop) */
 function deltaToCenterFrom(currentDeg:number, sliceIndex:number, total:number){
   const slice = 360/total;
   const center = sliceIndex*slice + slice/2;
   const mod = ((-center - currentDeg) % 360 + 360) % 360;
-  // add 2 full turns to make it satisfying
   return 720 + mod;
 }
 
-/* ========== Component ========== */
 export default function WheelPage(){
+  /* ---------- Data ---------- */
   const [me,setMe]=useState<Me|null>(null);
   const [mode,setMode]=useState<50|100|200>(100);
   const [entries,setEntries]=useState<Entry[]>([]);
   const [wins,setWins]=useState<Win[]>([]);
   const [popup,setPopup]=useState<Popup|null>(null);
 
-  // UI state
-  const [spinning,setSpinning]=useState(false);
-  const [banner,setBanner]=useState<string|null>(null); // “Username aylantiryapti…”
+  /* ---------- UI state ---------- */
+  const [spinning,setSpinning]=useState(false);     // button state
+  const [banner,setBanner]=useState<string|null>(null); // “X aylantiryapti…”
 
-  // global spin tracking
+  /* ---------- Global spin tracking ---------- */
   const currentSpinId=useRef<string|null>(null);
-  const startedAt=useRef<number|null>(null); // ms epoch provided by server
+  const startedAt=useRef<number|null>(null);  // ms epoch from server
+  const resultRef=useRef<Popup|null>(null);   // store result until animation finishes
 
-  // DOM refs
+  /* ---------- DOM ---------- */
   const wheelRef=useRef<HTMLDivElement>(null);
-  const idleAnimOn=useRef(false);
 
-  // data loaders
+  /* ---------- Data loaders ---------- */
   async function loadMe(){const r=await fetch("/api/me",{cache:"no-store"}); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`,{cache:"no-store"}); if(r.ok) setEntries(await r.json());}
   async function loadWins(){const r=await fetch("/api/recent-wins",{cache:"no-store"}); if(r.ok) setWins(await r.json());}
@@ -63,58 +62,61 @@ export default function WheelPage(){
   useEffect(()=>{ loadEntries(mode); },[mode]);
 
   /* ---------- Wheel visual helpers ---------- */
-  function resetWheel(){
-    if(!wheelRef.current) return;
-    const el = wheelRef.current;
-    el.style.animation = "none";
-    el.style.transition = "none";
-    el.style.transform = "rotate(0deg)";
-    idleAnimOn.current = false;
+  function resetWheelTo(deg:number){
+    if (!wheelRef.current) return;
+    const el=wheelRef.current;
+    el.style.animation="none";
+    el.style.transition="none";
+    el.style.transform=`rotate(${deg}deg)`;
+    // force reflow so next transition definitely runs
+    void el.offsetHeight;
   }
-  /** while waiting for result, rotate smoothly at constant speed */
-  function startIdleSpin(){
-    if(!wheelRef.current) return;
-    const el = wheelRef.current;
-    el.style.transition = "none";
-    el.style.animation = "spinLinear 900ms linear infinite";
-    idleAnimOn.current = true;
+
+  /** Start the WAITING phase: constant rotation while we wait for the server’s result */
+  function startWaitingSpin(){
+    if (!wheelRef.current) return;
+    const el=wheelRef.current;
+    el.style.transition="none";
+    el.style.animation="spinLinear 900ms linear infinite";
   }
-  /** stop idle spin and ease-out to target */
-  function easeToPrize(prizeName:string, prizeMode?:50|100|200, totalMsTarget=10000){
-    if(!wheelRef.current) return;
+
+  /** Finish: stop animation and ease-out to the exact winning slice center */
+  function finishToPrize(p: Popup, totalMsTarget=10000){
+    if (!wheelRef.current) return;
     const el = wheelRef.current;
 
-    // pick index
-    const total = Math.max(8, entries.length || 8);
-    const idx = Math.max(0, entries.findIndex(e=> e.name === prizeName || (prizeName.includes("Yana") && e.kind==="another")));
-
-    // stop idle animation & read current angle
-    el.style.animation = "none";
-    idleAnimOn.current = false;
+    // read current angle WHILE animation is still on
     const current = readCurrentDeg(el);
 
-    // compute remaining time so total ≈ 10s
+    // stop animation & freeze at “current”
+    resetWheelTo(current);
+
+    // compute remaining time so total ≈ totalMsTarget
     const now = Date.now();
     const elapsed = startedAt.current ? Math.max(0, now - startedAt.current) : 0;
-    const remaining = Math.max(900, Math.min(4000, totalMsTarget - elapsed)); // clamp 0.9s..4s
+    const remaining = Math.max(1200, Math.min(4500, totalMsTarget - elapsed)); // 1.2s..4.5s
 
-    // compute final angle
-    const delta = deltaToCenterFrom(current, idx, total);
-    const finalDeg = current + delta;
+    // find slice index
+    const total = Math.max(8, entries.length || 8);
+    const idx = Math.max(0, entries.findIndex(e => e.name === p.prize || (p.prize.includes("Yana") && e.kind==="another")));
+    const finalDeg = current + deltaToCenterFrom(current, idx, total);
 
-    // animate with ease-out
+    // ease-out to final
     el.style.transition = `transform ${remaining}ms cubic-bezier(.12,.9,.18,1)`;
-    el.style.transform = `rotate(${finalDeg}deg)`;
+    el.style.transform  = `rotate(${finalDeg}deg)`;
 
-    // show popup after the stop
-    setTimeout(()=> {
+    // when transition ends → show popup & restore button
+    const onEnd = () => {
+      el.removeEventListener('transitionend', onEnd);
       setSpinning(false);
       setBanner(null);
-      setPopup((prev)=>prev); // keep if already set by SSE
-    }, remaining + 20);
+      setPopup(resultRef.current); // guaranteed to show
+      resultRef.current = null;
+    };
+    el.addEventListener('transitionend', onEnd, { once: true });
   }
 
-  /* ---------- Polling: authoritative state ---------- */
+  /* ---------- Polling (authoritative) ---------- */
   useEffect(()=>{
     let stop=false;
     const tick=async ()=>{
@@ -131,34 +133,31 @@ export default function WheelPage(){
           startedAt.current = state.startedAt ?? Date.now();
           if (currentSpinId.current !== state.spinId){
             currentSpinId.current = state.spinId;
-            // reset & start idle rotation
-            resetWheel();
-            startIdleSpin();
-            // reflect spinner’s mode in UI if you want
+            resetWheelTo(0);
+            startWaitingSpin();
             if (state.mode && state.mode !== mode) setMode(state.mode);
           }
         }
 
         if (lastPopup?.spinId && lastPopup.spinId === currentSpinId.current){
-          // finish on all clients
-          if (!popup) setPopup(lastPopup); // store to show later after ease
-          easeToPrize(lastPopup.prize, lastPopup.mode, 10000);
+          resultRef.current = lastPopup;
+          finishToPrize(lastPopup, 10000);
           await loadWins(); await loadMe();
           currentSpinId.current = null;
         }
       }catch{}
-      if (!stop) setTimeout(tick, 450);
+      if(!stop) setTimeout(tick, 450);
     };
     tick();
     return ()=>{ stop=true; };
-  },[entries.length, mode]); // re-run if entries count changes
+  },[entries.length, mode]);
 
-  /* ---------- SSE: faster reaction ---------- */
+  /* ---------- SSE (fast path) ---------- */
   useEffect(()=>{
-    const es=new EventSource("/api/spin/stream");
+    const es = new EventSource("/api/spin/stream");
 
-    es.addEventListener("SPIN_START",(e:any)=>{
-      const s=JSON.parse(e.data); // {spinId,by,mode,startedAt}
+    es.addEventListener("SPIN_START", (e:any)=>{
+      const s = JSON.parse(e.data); // {spinId,by,mode,startedAt}
       if(!s?.spinId) return;
       setSpinning(true);
       setBanner(s.by ?? null);
@@ -166,27 +165,27 @@ export default function WheelPage(){
 
       if (currentSpinId.current !== s.spinId){
         currentSpinId.current = s.spinId;
-        resetWheel();
-        startIdleSpin();
+        resetWheelTo(0);
+        startWaitingSpin();
         if (s.mode && s.mode !== mode) setMode(s.mode);
       }
     });
 
-    es.addEventListener("SPIN_RESULT",(e:any)=>{
-      const d=JSON.parse(e.data);
+    es.addEventListener("SPIN_RESULT", (e:any)=>{
+      const d = JSON.parse(e.data);
       const p: Popup | undefined = d?.popup;
-      if(!p?.spinId) return;
+      if (!p?.spinId) return;
       if (p.spinId === currentSpinId.current){
-        setPopup(p);
-        easeToPrize(p.prize, p.mode, 10000);
+        resultRef.current = p;
+        finishToPrize(p, 10000);
         loadWins(); loadMe();
         currentSpinId.current = null;
       }
     });
 
-    es.addEventListener("ping",()=>{});
+    es.addEventListener("ping", ()=>{});
     es.onerror = () => {};
-    return ()=>es.close();
+    return ()=> es.close();
   },[entries.length, mode]);
 
   /* ---------- Local click ---------- */
@@ -195,24 +194,24 @@ export default function WheelPage(){
     setSpinning(true);
     setBanner(me?.name ?? null);
     startedAt.current = Date.now();
-    resetWheel();
-    startIdleSpin();
+    resetWheelTo(0);
+    startWaitingSpin();
 
-    const r=await fetch("/api/spin/start",{
+    const r = await fetch("/api/spin/start",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({mode})
     });
-    if(!r.ok){
-      // revert visuals if server denied
+    if (!r.ok){
+      // revert visuals if server refused
       setSpinning(false);
       setBanner(null);
-      resetWheel();
-      const j=await r.json().catch(()=>({}));
+      resetWheelTo(0);
+      const j = await r.json().catch(()=>({}));
       alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
       return;
     }
-    // wait for global SPIN_START/SPIN_RESULT to sync everyone
+    // Wait for SPIN_START / SPIN_RESULT (global sync)
   }
 
   /* ---------- Visuals ---------- */
@@ -256,7 +255,7 @@ export default function WheelPage(){
         <div className="relative">
           {/* Pointer */}
           <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[14px] border-r-[14px] border-b-[28px] border-l-transparent border-r-transparent border-b-yellow-400 drop-shadow" />
-          {/* Frame + wheel */}
+          {/* Frame + Wheel */}
           <div className="relative w-[460px] h-[460px] rounded-full bg-neutral-900 border-4 border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.5)] overflow-hidden">
             <div ref={wheelRef} className="absolute inset-0" style={{transform:"rotate(0deg)"}}>
               <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%">
@@ -323,7 +322,7 @@ export default function WheelPage(){
         </div>
       </div>
 
-      {/* Global popup (shows right after the deceleration finishes) */}
+      {/* Global popup (appears exactly on transition end) */}
       {popup && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={()=>setPopup(null)}>
           <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
