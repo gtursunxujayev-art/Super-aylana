@@ -10,9 +10,7 @@ import crypto from "node:crypto";
 
 const SPIN_MS = 8000;
 
-async function sleep(ms: number) {
-  await new Promise(res => setTimeout(res, ms));
-}
+const sleep = (ms:number) => new Promise(res => setTimeout(res, ms));
 
 async function acquireLock(userId: string) {
   const ok = await redis.set(REDIS_LOCK_KEY, userId, { nx: true, ex: Math.ceil(SPIN_MS / 1000) + 2 });
@@ -23,37 +21,21 @@ export async function POST(req: Request) {
   try {
     const user = await requireUser();
     const { mode } = await req.json() as { mode: 50 | 100 | 200 };
-    if (![50, 100, 200].includes(Number(mode))) {
-      return NextResponse.json({ error: "bad mode" }, { status: 400 });
-    }
+    if (![50,100,200].includes(Number(mode))) return NextResponse.json({ error: "bad mode" }, { status: 400 });
 
-    // balance check (fresh)
     const fresh = await prisma.user.findUnique({ where: { id: user.id } });
-    if (!fresh || fresh.balance < Number(mode)) {
-      return NextResponse.json({ error: "NOT_ENOUGH_COINS" }, { status: 402 });
-    }
+    if (!fresh || fresh.balance < Number(mode)) return NextResponse.json({ error: "NOT_ENOUGH_COINS" }, { status: 402 });
 
-    // single global lock
     const locked = await acquireLock(user.id);
-    if (!locked) {
-      return NextResponse.json({ error: "BUSY" }, { status: 423 });
-    }
+    if (!locked) return NextResponse.json({ error: "BUSY" }, { status: 423 });
 
-    // set SPINNING state visible to everyone
     const startedAt = Date.now();
-    await redis.set(
-      REDIS_STATE_KEY,
-      JSON.stringify({ status: "SPINNING", by: user.name, mode, startedAt }),
-      { ex: Math.ceil(SPIN_MS / 1000) + 5 }
-    );
+    await redis.set(REDIS_STATE_KEY, JSON.stringify({ status: "SPINNING", by: user.name, mode, startedAt }), { ex: Math.ceil(SPIN_MS/1000)+5 });
 
-    // charge coins
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { balance: { decrement: Number(mode) } },
-    });
+    // charge now
+    await prisma.user.update({ where: { id: user.id }, data: { balance: { decrement: Number(mode) } } });
 
-    // determine result
+    // build & pick
     const entries = await buildWheel(mode);
     const seed = crypto.randomBytes(12).toString("hex");
     const pick = weightedPick(entries);
@@ -68,7 +50,6 @@ export async function POST(req: Request) {
       },
     });
 
-    // audit
     await prisma.spinAudit.create({
       data: {
         userId: user.id,
@@ -79,34 +60,27 @@ export async function POST(req: Request) {
       },
     });
 
-    // send immediate response so client can animate
-    // (we'll publish the popup after SPIN_MS below)
+    // publish popup AFTER the spin time so everyone finishes animating together
     (async () => {
-      // wait the duration of the spin
       await sleep(SPIN_MS);
-
       const popup = {
         user: user.name,
         prize: pick.kind === "another" ? "Yana bir bor aylantirish" : pick.name,
         imageUrl: pick.imageUrl ?? null,
+        mode,               // <- include mode so others can align to the right wheel
       };
-
-      // write popup + flip state to IDLE
       await redis.set(REDIS_LAST_POP_KEY, JSON.stringify(popup), { ex: 60 });
       await redis.set(REDIS_STATE_KEY, JSON.stringify({ status: "IDLE", by: null, result: popup }), { ex: 30 });
-
-      // release lock
       await redis.del(REDIS_LOCK_KEY);
-    })().catch(() => { /* ignore */ });
+    })().catch(()=>{});
 
+    // immediate response to spinner (includes exact pick so we can aim the pointer precisely)
     return NextResponse.json({
       ok: true,
-      result: { type: pick.kind, name: pick.name, imageUrl: pick.imageUrl ?? null, rewardId: reward.id },
+      result: { type: pick.kind, name: pick.name, imageUrl: pick.imageUrl ?? null },
       spinMs: SPIN_MS,
     });
   } catch (e) {
-    console.error(e);
-    // be safe: release lock on crash
     try { await redis.del(REDIS_LOCK_KEY); } catch {}
     return NextResponse.json({ error: "spin_failed" }, { status: 500 });
   }
