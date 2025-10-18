@@ -12,14 +12,15 @@ export async function GET() {
       redis.get<number>(REDIS_VER_KEY),
     ]);
 
-    const body = {
-      ...(stateRaw ? JSON.parse(stateRaw) : { status: "IDLE" }),
-      lastPopup: popRaw ? JSON.parse(popRaw) : null,
+    const state = stateRaw ? JSON.parse(stateRaw) : { status: "IDLE", spinId: null };
+    const lastPopup = popRaw ? JSON.parse(popRaw) : null;
+
+    return new NextResponse(JSON.stringify({
+      state,
+      lastPopup,
       ver: ver ?? 0,
       _ts: Date.now(),
-    };
-
-    return new NextResponse(JSON.stringify(body), {
+    }), {
       status: 200,
       headers: {
         "Content-Type": "application/json",
@@ -29,9 +30,9 @@ export async function GET() {
       },
     });
   } catch {
-    return new NextResponse(JSON.stringify({ status: "IDLE", lastPopup: null, ver: 0, _ts: Date.now() }), {
-      status: 200,
-      headers: { "Cache-Control": "no-store", "Content-Type": "application/json" },
-    });
+    return new NextResponse(JSON.stringify({
+      state: { status: "IDLE", spinId: null },
+      lastPopup: null, ver: 0, _ts: Date.now(),
+    }), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }});
   }
 }
