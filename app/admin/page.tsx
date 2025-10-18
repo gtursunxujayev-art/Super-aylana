@@ -33,14 +33,17 @@ export default function AdminPage() {
   async function becomeAdmin() {
     const r = await fetch("/api/auth/refresh", { method: "POST" });
     const j = await r.json().catch(()=>({}));
-    if (j?.role === "ADMIN") { setErr(""); loadUsers(); alert("You are ADMIN now."); }
+    if (j?.role === "ADMIN") { setErr(""); await loadUsers(); alert("You are ADMIN now."); }
     else alert("Your TGID must match ADMIN_TGID in env.");
   }
 
+  // Coins
   async function doGive(){
     const r = await fetch("/api/admin/coins", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(give) });
     if (r.ok) { alert("OK"); loadUsers(); } else alert("Xatolik");
   }
+
+  // Items
   async function addItem(){
     const r = await fetch("/api/items", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(newItem) });
     if (r.ok) { setNewItem({ name:"", price:100, imageUrl:"", weight:10 }); loadItems(); } else alert("Xatolik");
@@ -55,6 +58,7 @@ export default function AdminPage() {
     if (r.ok) loadItems(); else alert("Xatolik");
   }
 
+  // Store
   async function storeAdd(){
     if (!addStoreItemId) return;
     const r = await fetch("/api/store", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ itemId: addStoreItemId }) });
@@ -70,11 +74,22 @@ export default function AdminPage() {
     if (r.ok) loadStore(); else alert("Xatolik");
   }
 
+  // Rewards
   async function setDelivered(id: string, delivered: boolean) {
     const r = await fetch("/api/admin/rewards", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id, status: delivered ? "DELIVERED" : "PENDING" }) });
     if (r.ok) loadRewards(); else alert("Xatolik");
   }
 
+  // Users
+  async function saveUser(u: User) {
+    const r = await fetch("/api/admin/users", {
+      method:"PUT", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ id: u.id, name: u.name, role: u.role })
+    });
+    if (r.ok) loadUsers(); else alert("Xatolik");
+  }
+
+  // Gift codes
   async function createCode(){
     const r = await fetch("/api/admin/gift-codes", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(newCode) });
     if (r.ok) { setNewCode({ code: "", amount: 100, maxRedemptions: 1 }); loadCodes(); } else alert("Xatolik");
@@ -99,6 +114,50 @@ export default function AdminPage() {
         ))}
       </div>
 
+      {/* Rewards */}
+      {tab==="rewards" && (
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left">
+              <th className="p-2">User</th><th className="p-2">Mode</th><th className="p-2">Prize</th><th className="p-2">Status</th><th className="p-2">Time</th><th className="p-2">Action</th>
+            </tr></thead>
+            <tbody>
+              {rewards.map(r=>(
+                <tr key={r.id} className="border-t border-white/10">
+                  <td className="p-2">{r.username}</td>
+                  <td className="p-2">{r.price}</td>
+                  <td className="p-2">{r.prize}</td>
+                  <td className="p-2">{r.status}</td>
+                  <td className="p-2">{new Date(r.createdAt).toLocaleString()}</td>
+                  <td className="p-2">
+                    <button onClick={()=>setDelivered(r.id, r.status!=="DELIVERED")} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs">
+                      {r.status==="DELIVERED" ? "Mark Pending" : "Mark Delivered"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {rewards.length===0 && <tr><td className="p-2 text-neutral-400" colSpan={6}>No rewards yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Coins */}
+      {tab==="coins" && (
+        <div className="space-y-3">
+          <div className="flex gap-2 items-center">
+            <select className="bg-white/10 px-3 py-2 rounded" value={give.userId} onChange={e=>setGive(v=>({ ...v, userId: e.target.value }))}>
+              <option value="">Select user</option>
+              {users.map(u=><option key={u.id} value={u.id}>{u.name} ({u.balance})</option>)}
+            </select>
+            <input className="bg-white/10 px-3 py-2 rounded w-28" type="number" value={give.delta} onChange={e=>setGive(v=>({ ...v, delta: Number(e.target.value) }))} placeholder="Delta (+/-)"/>
+            <input className="bg-white/10 px-3 py-2 rounded w-64" value={give.reason} onChange={e=>setGive(v=>({ ...v, reason: e.target.value }))} placeholder="Reason"/>
+            <button onClick={doGive} className="px-4 py-2 bg-emerald-600 rounded">Submit</button>
+          </div>
+        </div>
+      )}
+
+      {/* Users */}
       {tab==="users" && (
         <div className="overflow-auto">
           <table className="w-full text-sm">
@@ -122,11 +181,7 @@ export default function AdminPage() {
                 </td>
                 <td className="p-2">
                   <button className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs"
-                          onClick={async()=>{ 
-                            await fetch("/api/admin/users", { method:"PUT", headers:{ "Content-Type":"application/json" },
-                              body: JSON.stringify({ id: u.id, name: u.name, role: u.role }) });
-                            loadUsers();
-                          }}>
+                          onClick={()=>saveUser(u)}>
                     Save
                   </button>
                 </td>
@@ -137,9 +192,121 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* The rest of tabs (rewards/coins/items/store/giftcodes/help) – keep your previously provided versions */}
-      {/* ... copy from the previous Admin file I sent (unchanged) */}
-      {/* For brevity here, only Users tab changed; if you need the full file with all tabs again, say "send full admin" */}
+      {/* Items */}
+      {tab==="items" && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <input className="bg-white/10 px-3 py-2 rounded" placeholder="Name" value={newItem.name} onChange={e=>setNewItem(v=>({...v, name: e.target.value}))}/>
+            <input type="number" className="bg-white/10 px-3 py-2 rounded w-28" placeholder="Price" value={newItem.price} onChange={e=>setNewItem(v=>({...v, price: Number(e.target.value)}))}/>
+            <input type="number" className="bg-white/10 px-3 py-2 rounded w-28" placeholder="Weight" value={newItem.weight} onChange={e=>setNewItem(v=>({...v, weight: Number(e.target.value)}))}/>
+            <input className="bg-white/10 px-3 py-2 rounded w-[320px]" placeholder="Image URL" value={newItem.imageUrl} onChange={e=>setNewItem(v=>({...v, imageUrl: e.target.value}))}/>
+            <button onClick={addItem} className="px-3 py-2 bg-emerald-600 rounded">Add</button>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            {items.map(i=>(
+              <div key={i.id} className="p-3 bg-white/5 rounded flex items-center gap-3">
+                <img src={i.imageUrl ?? ""} alt="" className="w-16 h-16 object-cover rounded"/>
+                <div className="flex-1">
+                  <div className="font-medium">{i.name}</div>
+                  <div className="text-sm text-neutral-400">{i.price} coins · weight {i.weight} · {i.active ? "active" : "inactive"}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <input className="bg-white/10 px-2 py-1 rounded text-sm" defaultValue={i.name} onBlur={(e)=>updateItem({ id: i.id, name: e.currentTarget.value })}/>
+                    <input type="number" className="bg-white/10 px-2 py-1 rounded text-sm w-24" defaultValue={i.price} onBlur={(e)=>updateItem({ id: i.id, price: Number(e.currentTarget.value) })}/>
+                    <input type="number" className="bg-white/10 px-2 py-1 rounded text-sm w-24" defaultValue={i.weight} onBlur={(e)=>updateItem({ id: i.id, weight: Number(e.currentTarget.value) })}/>
+                    <input className="bg-white/10 px-2 py-1 rounded text-sm w-64" placeholder="Image URL" defaultValue={i.imageUrl ?? ""} onBlur={(e)=>updateItem({ id: i.id, imageUrl: e.currentTarget.value })}/>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button onClick={()=>updateItem({ id: i.id, active: !i.active })} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs">{i.active?"Disable":"Enable"}</button>
+                  <button onClick={()=>deleteItem(i.id)} className="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-xs">Delete</button>
+                </div>
+              </div>
+            ))}
+            {items.length===0 && <div className="text-neutral-400">No items yet.</div>}
+          </div>
+        </div>
+      )}
+
+      {/* Store */}
+      {tab==="store" && (
+        <div className="space-y-4">
+          <div className="flex gap-2 items-center">
+            <select className="bg-white/10 px-3 py-2 rounded min-w-64" value={addStoreItemId} onChange={e=>setAddStoreItemId(e.target.value)}>
+              <option value="">Add item to store…</option>
+              {items.map(i=>(
+                <option key={i.id} value={i.id}>{i.name} — {i.price}</option>
+              ))}
+            </select>
+            <button onClick={storeAdd} className="px-3 py-2 bg-emerald-600 rounded">Add</button>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {store.map(s=>(
+              <div key={s.id} className="p-3 bg-white/5 rounded">
+                <div className="aspect-video rounded-lg overflow-hidden bg-white/10">
+                  {s.item.imageUrl ? <img src={s.item.imageUrl} className="w-full h-full object-cover" alt=""/> : null}
+                </div>
+                <div className="mt-2 font-medium">{s.item.name}</div>
+                <div className="text-sm text-neutral-400">{s.item.price} coins</div>
+                <div className="mt-2 flex gap-2">
+                  <button onClick={()=>storeToggle(s.id, !s.active)} className="px-3 py-1 rounded bg-white/10 hover:bg-white/20">
+                    {s.active ? "Disable" : "Enable"}
+                  </button>
+                  <button onClick={()=>storeDelete(s.id)} className="px-3 py-1 rounded bg-red-600 hover:bg-red-700">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+            {store.length===0 && <div className="text-neutral-400">Store is empty.</div>}
+          </div>
+        </div>
+      )}
+
+      {/* Gift codes */}
+      {tab==="giftcodes" && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <input className="bg-white/10 px-3 py-2 rounded" placeholder="CODE" value={newCode.code} onChange={e=>setNewCode(v=>({...v, code:e.target.value}))}/>
+            <input type="number" className="bg-white/10 px-3 py-2 rounded w-28" placeholder="Amount" value={newCode.amount} onChange={e=>setNewCode(v=>({...v, amount:Number(e.target.value)}))}/>
+            <input type="number" className="bg-white/10 px-3 py-2 rounded w-40" placeholder="Max redemptions" value={newCode.maxRedemptions} onChange={e=>setNewCode(v=>({...v, maxRedemptions:Number(e.target.value)}))}/>
+            <button onClick={createCode} className="px-3 py-2 bg-emerald-600 rounded">Create</button>
+          </div>
+
+          <div className="overflow-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left">
+                <th className="p-2">Code</th><th className="p-2">Amount</th><th className="p-2">Redeemed</th><th className="p-2">Active</th><th className="p-2">Action</th>
+              </tr></thead>
+              <tbody>
+                {codes.map(c=>(
+                  <tr key={c.id} className="border-t border-white/10">
+                    <td className="p-2">{c.code}</td>
+                    <td className="p-2">{c.amount}</td>
+                    <td className="p-2">{c.redeemedCount}/{c.maxRedemptions}</td>
+                    <td className="p-2">{String(c.active)}</td>
+                    <td className="p-2">
+                      <button onClick={()=>toggleCode(c.id, !c.active)} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs">{c.active?"Disable":"Enable"}</button>
+                    </td>
+                  </tr>
+                ))}
+                {codes.length===0 && <tr><td className="p-2 text-neutral-400" colSpan={5}>No codes yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Help */}
+      {tab==="help" && (
+        <div className="space-y-3 text-sm text-neutral-300">
+          <div>❗ If lists are empty or you get 403, click <b>Become Admin</b>. It promotes you if your TGID matches <code>ADMIN_TGID</code>.</div>
+          <div>• Items tab lets you set <b>weight</b> (odds). Higher weight ⇒ more likely when item price equals the selected mode.</div>
+          <div>• Rewards tab lets you mark items <b>DELIVERED</b>.</div>
+          <div>• Gift codes: create <code>AYLANA100</code> and share. Users redeem via POST <code>/api/redeem</code> or add a tiny UI page later.</div>
+        </div>
+      )}
     </div>
   );
 }
