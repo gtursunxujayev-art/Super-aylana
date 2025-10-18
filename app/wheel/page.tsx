@@ -2,13 +2,26 @@
 import { useEffect, useRef, useState } from "react";
 
 type Me = { id: string; name: string; balance: number; role: string; login?: string };
-type Popup = { user: string; prize: string; imageUrl?: string | null };
+type Popup = { user: string; prize: string; imageUrl?: string | null; mode?: 50|100|200 };
 type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item"|"another" };
 type Win = { id: string; user: string; prize: string; imageUrl?: string|null; time: string };
 
 function deg2rad(d:number){return (d*Math.PI)/180}
 function polar(cx:number, cy:number, r:number, aDeg:number){const a=deg2rad(aDeg);return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)}}
 function arcPath(cx:number,cy:number,r:number,start:number,end:number){const s=polar(cx,cy,r,start),e=polar(cx,cy,r,end);const large=end-start<=180?0:1;return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`}
+
+// Compute how much to rotate from current angle so slice index i ends centered at the top pointer.
+// We draw slices with startAngle = i*slice - 90, so the center for index i is (-90 + i*slice + slice/2).
+// To put that at the top (pointer), we need wheel rotation so that center becomes -90.
+// Delta = targetCenterAtTop - currentCenter = (-90) - (-90 + i*slice + slice/2) = -(i*slice + slice/2).
+function deltaToCenter(i:number, count:number, currentDeg:number){
+  const slice = 360 / count;
+  const center = i * slice + slice / 2;
+  // we want to rotate so that (currentDeg + delta + center) % 360 === 0
+  // Solve for delta: delta ≡ -center - currentDeg (mod 360) ; choose a large positive delta
+  const mod = ((-center - (currentDeg % 360)) % 360 + 360) % 360;
+  return 360*8 + mod; // 8 extra spins for drama
+}
 
 export default function WheelPage() {
   const [me, setMe] = useState<Me | null>(null);
@@ -20,18 +33,20 @@ export default function WheelPage() {
   const [popup, setPopup] = useState<Popup | null>(null);
 
   const wheelRef = useRef<HTMLDivElement>(null);
-  const fallbackTimer = useRef<any>(null);
-  const rot = useRef<number>(0);            // <- cumulative rotation
-  const lastPopupHash = useRef<string>(""); // <- de-dupe popups
+  const fallTimer = useRef<any>(null);
+  const rot = useRef<number>(0);
+  const lastPopupHash = useRef<string>("");
+  const extTicker = useRef<any>(null);   // external continuous spin interval
+  const viewLocked = useRef<boolean>(false); // lock UI to external spinner's mode during spin
 
   async function loadMe(){const r=await fetch("/api/me"); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`); if(r.ok) setEntries(await r.json());}
   async function loadWins(){const r=await fetch("/api/feed/recent-wins"); if(r.ok) setWins(await r.json());}
 
   useEffect(()=>{ loadMe(); loadWins(); }, []);
-  useEffect(()=>{ loadEntries(mode); }, [mode]);
+  useEffect(()=>{ if(!viewLocked.current) loadEntries(mode); }, [mode]);
 
-  // Helper to safely show popup once
+  // De-dupe popup display
   function showPopupOnce(p: Popup){
     const hash = JSON.stringify(p);
     if (hash !== lastPopupHash.current) {
@@ -40,7 +55,7 @@ export default function WheelPage() {
     }
   }
 
-  // Client polling (drives everyone’s banner + popup)
+  // Polling drives banners + popup for everyone
   useEffect(()=>{
     const t=setInterval(async ()=>{
       const r=await fetch("/api/spin/state",{ cache: "no-store" });
@@ -48,7 +63,22 @@ export default function WheelPage() {
       const j=await r.json();
 
       if (j?.status === "SPINNING" && j?.by) {
+        // sync to external spinner's mode
+        viewLocked.current = true;
+        if (j.mode && j.mode !== mode) {
+          setMode(j.mode);
+          // ensure correct entries for animation
+          await loadEntries(j.mode);
+        }
         setSomeoneSpinning({ by: j.by, mode: j.mode ?? mode });
+        // start continuous rotation if not already spinning locally
+        if (!spinning && !extTicker.current && wheelRef.current) {
+          extTicker.current = setInterval(()=>{
+            rot.current += 360;
+            wheelRef.current!.style.transition = `transform 0.7s linear`;
+            wheelRef.current!.style.transform = `rotate(${rot.current}deg)`;
+          }, 700);
+        }
       } else {
         setSomeoneSpinning(null);
       }
@@ -56,56 +86,88 @@ export default function WheelPage() {
       if (j?.lastPopup) showPopupOnce(j.lastPopup);
     }, 700);
     return ()=>clearInterval(t);
-  }, [mode]);
+  }, [mode, spinning]);
 
-  // SSE stream (optional; if it drops, polling still works)
+  // SSE (optional enhancement)
   useEffect(()=>{
     const es = new EventSource("/api/spin/stream");
-    es.addEventListener("SPIN_START", (e:any)=>{
+    es.addEventListener("SPIN_START", async (e:any)=>{
       const data = JSON.parse(e.data);
-      if (data?.by) setSomeoneSpinning({ by: data.by, mode: data.mode });
+      viewLocked.current = true;
+      if (data?.mode && data.mode !== mode) {
+        setMode(data.mode);
+        await loadEntries(data.mode);
+      }
+      setSomeoneSpinning({ by: data.by, mode: data.mode });
+      if (!spinning && !extTicker.current && wheelRef.current) {
+        extTicker.current = setInterval(()=>{
+          rot.current += 360;
+          wheelRef.current!.style.transition = `transform 0.7s linear`;
+          wheelRef.current!.style.transform = `rotate(${rot.current}deg)`;
+        }, 700);
+      }
     });
-    es.addEventListener("SPIN_RESULT", (e:any)=>{
+    es.addEventListener("SPIN_RESULT", async (e:any)=>{
       const data = JSON.parse(e.data);
-      if (data?.popup) showPopupOnce(data.popup);
+      // stop continuous rotation
+      if (extTicker.current) { clearInterval(extTicker.current); extTicker.current = null; }
+      // aim to the exact winning slice using the external mode & prize
+      const prizeName: string | undefined = data?.popup?.prize?.toString();
+      const prizeMode: 50|100|200 | undefined = data?.popup?.mode;
+      if (prizeMode && prizeMode !== mode) { setMode(prizeMode); await loadEntries(prizeMode); }
+      if (prizeName && wheelRef.current && entries.length) {
+        const i = Math.max(0, entries.findIndex(e=>e.name===prizeName || (prizeName.includes("Yana") && e.kind==="another")));
+        const delta = deltaToCenter(i === -1 ? 0 : i, Math.max(entries.length,8), rot.current);
+        rot.current += delta;
+        wheelRef.current.style.transition = `transform 1.2s cubic-bezier(.2,.9,.2,1)`;
+        wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
+      }
+      showPopupOnce(data.popup);
+      loadWins(); loadMe();
+      viewLocked.current = false; // release UI lock
       setSomeoneSpinning(null);
-      loadWins();
-      loadMe();
     });
     es.addEventListener("ping", ()=>{});
-    es.onerror = () => {}; // silent retry
+    es.onerror = () => {};
     return ()=>{ es.close(); };
-  }, []);
+  }, [entries, mode, spinning]);
 
   async function spin(){
     if(spinning) return;
     setSpinning(true);
+    viewLocked.current = true;
+
     const r=await fetch("/api/spin/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode})});
     if(!r.ok){
       const j=await r.json().catch(()=>({}));
       alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
-      setSpinning(false); return;
+      setSpinning(false); viewLocked.current = false; return;
     }
     const j=await r.json();
-    // Always add a big delta to the cumulative rotation
-    const delta = 360*8 + Math.floor(Math.random()*360);
-    rot.current += delta;
-    if(wheelRef.current){
-      wheelRef.current.style.transition=`transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`;
-      wheelRef.current.style.transform=`rotate(${rot.current}deg)`;
+
+    // aim precisely to the winning slice for the spinner himself
+    if (wheelRef.current && entries.length) {
+      const count = Math.max(8, entries.length);
+      const name = j.result.name as string;
+      const idx = Math.max(0, entries.findIndex(e=>e.name===name || (j.result.type==="another" && e.kind==="another")));
+      const delta = deltaToCenter(idx === -1 ? 0 : idx, count, rot.current);
+      rot.current += delta;
+      wheelRef.current.style.transition = `transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`;
+      wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
     }
 
-    // Fallback popup for the spinner's own window (in case SSE/polling is late)
-    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
-    fallbackTimer.current = setTimeout(()=>{
+    // Fallback in case SSE/poll result is late
+    if (fallTimer.current) clearTimeout(fallTimer.current);
+    fallTimer.current = setTimeout(()=>{
       showPopupOnce({
         user: me?.name ?? "Siz",
         prize: j.result.type==="another" ? "Yana bir bor aylantirish" : j.result.name,
-        imageUrl: j.result.imageUrl
+        imageUrl: j.result.imageUrl,
+        mode,
       });
-      loadWins();
-      loadMe();
-      fallbackTimer.current = null;
+      loadWins(); loadMe();
+      fallTimer.current = null;
+      viewLocked.current = false;
     }, j.spinMs + 200);
 
     setTimeout(()=>{ setSpinning(false); }, j.spinMs);
@@ -118,7 +180,6 @@ export default function WheelPage() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6 items-start">
-      {/* LEFT */}
       <div className="flex flex-col items-center gap-4">
         {someoneSpinning && (
           <div className="px-3 py-2 rounded bg-amber-600/20 text-amber-300 text-sm">
@@ -128,8 +189,10 @@ export default function WheelPage() {
 
         <div className="flex gap-2">
           {[50,100,200].map(m=>(
-            <button key={m} onClick={()=>setMode(m as 50|100|200)}
-              className={`px-4 py-2 rounded font-medium ${mode===m?'bg-emerald-600 text-white':'bg-white/10 hover:bg-white/20'}`}>{m}</button>
+            <button key={m} disabled={viewLocked.current} onClick={()=>!viewLocked.current && setMode(m as 50|100|200)}
+              className={`px-4 py-2 rounded font-medium ${mode===m?'bg-emerald-600 text-white':'bg-white/10 hover:bg-white/20'} ${viewLocked.current?'opacity-60 cursor-not-allowed':''}`}>
+              {m}
+            </button>
           ))}
         </div>
 
@@ -175,7 +238,7 @@ export default function WheelPage() {
 
         <div className="flex items-center gap-4">
           <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
-          <button disabled={spinning} onClick={spin}
+          <button disabled={spinning || viewLocked.current} onClick={spin}
             className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold">
             {spinning ? "Aylanyapti..." : `Spin (${mode})`}
           </button>
