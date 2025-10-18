@@ -14,8 +14,22 @@ export async function GET() {
     const state = stateRaw ? JSON.parse(stateRaw) : { status: "IDLE" };
     const lastPopup = popRaw ? JSON.parse(popRaw) : null;
 
-    return NextResponse.json({ ...state, lastPopup });
-  } catch (e) {
-    return NextResponse.json({ status: "IDLE", lastPopup: null }, { status: 200 });
+    return new NextResponse(
+      JSON.stringify({ ...state, lastPopup }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+          "Pragma": "no-cache",
+          "Expires": "0",
+        },
+      }
+    );
+  } catch {
+    return new NextResponse(
+      JSON.stringify({ status: "IDLE", lastPopup: null }),
+      { status: 200, headers: { "Cache-Control": "no-store" } }
+    );
   }
 }
