@@ -2,106 +2,69 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { redis, REDIS_STATE_KEY, REDIS_LAST_POP_KEY } from "@/app/lib/redis";
+import { redis, REDIS_STATE_KEY, REDIS_LAST_POP_KEY, REDIS_VER_KEY } from "@/app/lib/redis";
 
-/**
- * SSE stream using lightweight Redis polling (no Pub/Sub).
- * Emits:
- *  - event: SPIN_START  data: { by, mode, startedAt }
- *  - event: SPIN_RESULT data: { popup: { user, prize, imageUrl } }
- * Plus a heartbeat "ping" every 25s.
- */
 export async function GET() {
   const encoder = new TextEncoder();
 
-  const stream = new ReadableStream<Uint8Array>({
+  const stream = new ReadableStream({
     async start(controller) {
-      // Heartbeat so proxies don't close the connection
-      const heartbeat = setInterval(() => {
-        controller.enqueue(encoder.encode(`event: ping\ndata: {}\n\n`));
-      }, 25_000);
-
-      // Track last seen values to avoid duplicate events
-      let lastStateRaw: string | null = null;
-      let lastPopRaw: string | null = null;
-
-      // Helper: emit
-      const emit = (event: string, data: any) => {
-        controller.enqueue(
-          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-        );
+      let lastVer = -1;
+      const write = (event: string, data: any) => {
+        controller.enqueue(encoder.encode(`event: ${event}\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
-      // Initial check + emit current state (if spinning)
-      try {
-        const [s0, p0] = await Promise.all([
-          redis.get<string>(REDIS_STATE_KEY),
-          redis.get<string>(REDIS_LAST_POP_KEY),
-        ]);
-        lastStateRaw = s0 ?? null;
-        lastPopRaw = p0 ?? null;
+      // Send an initial ping so the connection is considered "open"
+      write("ping", { t: Date.now() });
 
-        if (s0) {
-          try {
-            const st = JSON.parse(s0);
-            if (st?.status === "SPINNING") {
-              emit("SPIN_START", { by: st.by, mode: st.mode, startedAt: st.startedAt ?? Date.now() });
-            }
-          } catch { /* ignore */ }
-        }
-        // We don't emit last popup immediately to prevent re-showing older wins on connect.
-      } catch { /* ignore */ }
-
-      // Poll every second
-      const tick = setInterval(async () => {
+      const interval = setInterval(async () => {
         try {
-          const [sRaw, pRaw] = await Promise.all([
-            redis.get<string>(REDIS_STATE_KEY),
-            redis.get<string>(REDIS_LAST_POP_KEY),
-          ]);
+          const ver = (await redis.get<number>(REDIS_VER_KEY)) ?? 0;
+          if (ver !== lastVer) {
+            lastVer = ver;
 
-          // State change → SPIN_START
-          if (sRaw && sRaw !== lastStateRaw) {
-            lastStateRaw = sRaw;
-            try {
-              const st = JSON.parse(sRaw);
-              if (st?.status === "SPINNING") {
-                emit("SPIN_START", { by: st.by, mode: st.mode, startedAt: st.startedAt ?? Date.now() });
-              }
-            } catch { /* ignore */ }
-          }
+            const [stateRaw, popRaw] = await Promise.all([
+              redis.get<string>(REDIS_STATE_KEY),
+              redis.get<string>(REDIS_LAST_POP_KEY),
+            ]);
 
-          // New popup → SPIN_RESULT
-          if (pRaw && pRaw !== lastPopRaw) {
-            lastPopRaw = pRaw;
-            try {
-              const popup = JSON.parse(pRaw);
-              emit("SPIN_RESULT", { popup });
-            } catch { /* ignore */ }
+            const state = stateRaw ? JSON.parse(stateRaw) : { status: "IDLE" };
+            const popup = popRaw ? JSON.parse(popRaw) : null;
+
+            if (state?.status === "SPINNING") {
+              write("SPIN_START", { by: state.by, mode: state.mode, startedAt: state.startedAt });
+            } else {
+              write("SPIN_IDLE", {});
+            }
+
+            if (popup) {
+              write("SPIN_RESULT", { popup });
+            }
+          } else {
+            write("ping", { t: Date.now() });
           }
-        } catch {
-          // If Redis hiccups, just keep the stream alive; next tick will recover.
+        } catch (e) {
+          write("ping", { err: String(e) });
         }
-      }, 1000);
+      }, 700);
 
-      // Close handlers
-      // @ts-ignore - Next.js sets request on globalThis
-      const abortSignal: AbortSignal | undefined = (globalThis as any).request?.signal;
-      const close = () => {
-        clearInterval(heartbeat);
-        clearInterval(tick);
-        try { controller.close(); } catch {}
-      };
-      if (abortSignal) abortSignal.addEventListener("abort", close);
+      const closer = () => clearInterval(interval);
+      // @ts-ignore
+      controller._closer = closer;
+    },
+    cancel() {
+      // @ts-ignore
+      if (typeof (this as any)?._closer === "function") (this as any)._closer();
     },
   });
 
   return new NextResponse(stream, {
     headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }
