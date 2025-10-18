@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from "react";
 
-type User = { id: string; name: string; login: string; balance: number; role: "USER"|"MODERATOR"|"ADMIN" };
+type Role = "USER" | "MODERATOR" | "ADMIN";
+type User = { id: string; name: string; login: string; balance: number; role: Role };
 type Item = { id: string; name: string; price: number; imageUrl?: string|null; active: boolean; weight: number };
 type Reward = { id: string; username: string; price: number; prize: string; imageUrl?: string|null; status: "PENDING"|"DELIVERED"; createdAt: string };
 type StoreItem = { id: string; active: boolean; item: Item };
@@ -44,8 +45,13 @@ export default function AdminPage() {
     const r = await fetch("/api/items", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(newItem) });
     if (r.ok) { setNewItem({ name:"", price:100, imageUrl:"", weight:10 }); loadItems(); } else alert("Xatolik");
   }
-  async function updateItem(it: Item){
-    const r = await fetch("/api/items", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(it) });
+  async function updateItem(partial: Partial<Item> & { id: string }){
+    const r = await fetch("/api/items", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(partial) });
+    if (r.ok) loadItems(); else alert("Xatolik");
+  }
+  async function deleteItem(id: string){
+    if (!confirm("Delete this item?")) return;
+    const r = await fetch("/api/items", { method: "DELETE", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
     if (r.ok) loadItems(); else alert("Xatolik");
   }
 
@@ -59,6 +65,7 @@ export default function AdminPage() {
     if (r.ok) loadStore(); else alert("Xatolik");
   }
   async function storeDelete(id: string) {
+    if (!confirm("Remove from store?")) return;
     const r = await fetch("/api/store", { method: "DELETE", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
     if (r.ok) loadStore(); else alert("Xatolik");
   }
@@ -157,18 +164,24 @@ export default function AdminPage() {
             <input className="bg-white/10 px-3 py-2 rounded w-[320px]" placeholder="Image URL" value={newItem.imageUrl} onChange={e=>setNewItem(v=>({...v, imageUrl: e.target.value}))}/>
             <button onClick={addItem} className="px-3 py-2 bg-emerald-600 rounded">Add</button>
           </div>
+
           <div className="grid md:grid-cols-2 gap-3">
             {items.map(i=>(
               <div key={i.id} className="p-3 bg-white/5 rounded flex items-center gap-3">
                 <img src={i.imageUrl ?? ""} alt="" className="w-16 h-16 object-cover rounded"/>
                 <div className="flex-1">
                   <div className="font-medium">{i.name}</div>
-                  <div className="text-sm text-neutral-400">{i.price} coins · weight {i.weight}</div>
+                  <div className="text-sm text-neutral-400">{i.price} coins · weight {i.weight} · {i.active ? "active" : "inactive"}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <input className="bg-white/10 px-2 py-1 rounded text-sm" defaultValue={i.name} onBlur={(e)=>updateItem({ id: i.id, name: e.currentTarget.value })}/>
+                    <input type="number" className="bg-white/10 px-2 py-1 rounded text-sm w-24" defaultValue={i.price} onBlur={(e)=>updateItem({ id: i.id, price: Number(e.currentTarget.value) })}/>
+                    <input type="number" className="bg-white/10 px-2 py-1 rounded text-sm w-24" defaultValue={i.weight} onBlur={(e)=>updateItem({ id: i.id, weight: Number(e.currentTarget.value) })}/>
+                    <input className="bg-white/10 px-2 py-1 rounded text-sm w-64" placeholder="Image URL" defaultValue={i.imageUrl ?? ""} onBlur={(e)=>updateItem({ id: i.id, imageUrl: e.currentTarget.value })}/>
+                  </div>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <button onClick={()=>updateItem({...i, active: !i.active})} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs">{i.active?"Disable":"Enable"}</button>
-                  <button onClick={()=>updateItem({...i, weight: Math.max(1, i.weight-1)})} className="px-2 py-1 rounded bg-white/10 text-xs">- weight</button>
-                  <button onClick={()=>updateItem({...i, weight: i.weight+1})} className="px-2 py-1 rounded bg-white/10 text-xs">+ weight</button>
+                  <button onClick={()=>updateItem({ id: i.id, active: !i.active })} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-xs">{i.active?"Disable":"Enable"}</button>
+                  <button onClick={()=>deleteItem(i.id)} className="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-xs">Delete</button>
                 </div>
               </div>
             ))}
@@ -247,7 +260,7 @@ export default function AdminPage() {
           <div>❗ If Users/Items are empty or you get 403, click <b>Become Admin</b>. It promotes you if your TGID matches <code>ADMIN_TGID</code>.</div>
           <div>• Items tab lets you set <b>weight</b> (odds). Higher weight ⇒ more likely when price equals the mode.</div>
           <div>• Rewards tab lets you mark items <b>DELIVERED</b>.</div>
-          <div>• Gift codes: create <code>AYLANA100</code> and share. Users redeem at <code>/redeem</code> (you can wire a small UI later).</div>
+          <div>• Gift codes: create <code>AYLANA100</code> and share. Users redeem via POST <code>/api/redeem</code> or a small UI you can add later.</div>
         </div>
       )}
     </div>
