@@ -1,18 +1,14 @@
 import { Redis } from "@upstash/redis";
 
-if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-  throw new Error("Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN");
+// Uses UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN from env
+export const redis = Redis.fromEnv();
+
+// Centralized keys
+export const REDIS_LOCK_KEY = "wheel:lock";        // string -> userId
+export const REDIS_STATE_KEY = "wheel:state";      // json   -> {status:'SPINNING'|'IDLE', by, mode, startedAt}
+export const REDIS_LAST_POP_KEY = "wheel:lastpop"; // json   -> {user, prize, imageUrl?, mode}
+export const REDIS_VER_KEY = "wheel:ver";          // number -> increments on every state/popup change
+
+export async function bumpVersion() {
+  try { await redis.incr(REDIS_VER_KEY); } catch {/* ignore */}
 }
-
-export const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
-
-// Keys
-export const REDIS_LOCK_KEY = "sa:spin:lock";
-export const REDIS_STATE_KEY = "sa:spin:state";
-export const REDIS_LAST_POP_KEY = "sa:spin:lastpopup";
-
-// Pub/Sub channel (for realtime)
-export const REDIS_SPIN_CHANNEL = "sa:spin:events";
