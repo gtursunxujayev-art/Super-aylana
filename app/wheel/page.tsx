@@ -8,13 +8,13 @@ type Popup = { spinId: string; user: string; prize: string; imageUrl?: string | 
 type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item" | "another" };
 type Win = { id: string; user: string; prize: string; imageUrl?: string | null; time: string };
 
-/* ---------- Geometry ---------- */
+/* ---------- Geometry helpers ---------- */
 function deg2rad(d:number){return d*Math.PI/180;}
 function polar(cx:number,cy:number,r:number,aDeg:number){const a=deg2rad(aDeg);return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)};}
 function arcPath(cx:number,cy:number,r:number,start:number,end:number){const s=polar(cx,cy,r,start),e=polar(cx,cy,r,end);const large=end-start<=180?0:1;return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`; }
 function deltaToCenter(i:number,count:number,currentDeg:number){const slice=360/count;const center=i*slice+slice/2;const mod=(( -center - (currentDeg%360) )%360+360)%360;return 360*8+mod;}
 
-/* ---------- Component ---------- */
+/* ========== Component ========== */
 export default function WheelPage(){
   const [me,setMe]=useState<Me|null>(null);
   const [mode,setMode]=useState<50|100|200>(100);
@@ -26,7 +26,8 @@ export default function WheelPage(){
   const rot=useRef(0);
   const ticker=useRef<any>(null);
 
-  const globalSpinId=useRef<string|null>(null);     // latest spinId seen globally
+  // Global spin state mirrors Redis
+  const globalSpinId=useRef<string|null>(null);
   const banner=useRef<{by:string|null,mode:number|null}>({by:null,mode:null});
   const lastPopupKey=useRef<string>("");
 
@@ -37,6 +38,7 @@ export default function WheelPage(){
   useEffect(()=>{ loadMe(); loadWins(); },[]);
   useEffect(()=>{ loadEntries(mode); },[mode]);
 
+  /** start/stop the continuous rotation (used while waiting for result) */
   function ensureTicker(){
     if (ticker.current || !wheelRef.current) return;
     ticker.current = setInterval(()=>{
@@ -47,6 +49,7 @@ export default function WheelPage(){
   }
   function stopTicker(){ if (ticker.current){ clearInterval(ticker.current); ticker.current=null; } }
 
+  /** snap all wheels to the exact winning slice */
   async function animateToPrize(prizeName:string, prizeMode?:50|100|200){
     if (prizeMode && prizeMode !== mode) { setMode(prizeMode); await loadEntries(prizeMode); }
     if (!wheelRef.current || !entries.length) return;
@@ -63,41 +66,41 @@ export default function WheelPage(){
     if (key!==lastPopupKey.current){ lastPopupKey.current=key; setPopup(p); }
   }
 
-  /* ---------- Polling: single source of truth ---------- */
+  /* ---------- Polling: single source of truth (no cache) ---------- */
   useEffect(()=>{
     let stop=false;
     const tick=async ()=>{
       try{
         const r=await fetch("/api/spin/state",{cache:"no-store"});
         if(!r.ok) return;
-        const { state, lastPopup } = await r.json();
+        const data = await r.json();
+        // support both shapes: { state, lastPopup } OR legacy {status, lastPopup}
+        const state = data?.state ?? { status: data?.status, spinId: data?.spinId, by: data?.by, mode: data?.mode };
+        const lastPopup = data?.lastPopup ?? data?.popup ?? null;
 
-        // New spin?
         if (state?.status==="SPINNING" && state.spinId){
           if (globalSpinId.current !== state.spinId){
+            // NEW GLOBAL SPIN: set banner, lock mode (visual), and start smooth ticker
             globalSpinId.current = state.spinId;
             banner.current = { by: state.by ?? null, mode: state.mode ?? null };
-            // lock mode visually to spinner mode (but we don't move buttons)
             if (state.mode && state.mode !== mode) { setMode(state.mode); await loadEntries(state.mode); }
-            ensureTicker(); // start clean ticker once
+            ensureTicker();
           } else {
             // keep banner fresh
             banner.current = { by: state.by ?? null, mode: state.mode ?? null };
           }
         } else {
-          // no active spin; do not kill ticker yet (result may come right after)
-          if (!lastPopup) stopTicker();
-          if (!lastPopup) { banner.current = { by: null, mode: null }; }
+          // no active spin (could be right after popup), don’t force-stop ticker until we see popup
+          if (!lastPopup) { banner.current = { by: null, mode: null }; stopTicker(); }
         }
 
-        // Result?
+        // result arrives?
         if (lastPopup?.spinId && lastPopup.spinId === globalSpinId.current){
           stopTicker();
           await animateToPrize(lastPopup.prize, lastPopup.mode);
           showPopupOnce(lastPopup);
           banner.current = { by: null, mode: null };
           await loadWins(); await loadMe();
-          // keep globalSpinId until a new spin starts
         }
       }catch{}
       if (!stop) setTimeout(tick, 500);
@@ -106,7 +109,7 @@ export default function WheelPage(){
     return ()=>{ stop=true; stopTicker(); };
   },[mode, entries.length]);
 
-  /* ---------- SSE (optional: just faster) ---------- */
+  /* ---------- SSE (faster reaction; polling still covers everything) ---------- */
   useEffect(()=>{
     const es = new EventSource("/api/spin/stream");
     es.addEventListener("SPIN_START", async (e:any)=>{
@@ -138,18 +141,29 @@ export default function WheelPage(){
     return ()=>{ es.close(); };
   },[mode, entries.length]);
 
-  /* ---------- Local spin ---------- */
+  /* ---------- LOCAL SPIN (FIX: start ticker immediately here) ---------- */
   async function spin(){
-    // local protection; global lock enforced server-side
-    const r=await fetch("/api/spin/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode})});
+    // Start the visual rotation immediately so it never feels stuck
+    ensureTicker();
+    // Show your name in the banner instantly (global state will overwrite shortly)
+    if (me?.name) banner.current = { by: me.name, mode };
+
+    const r=await fetch("/api/spin/start",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({mode})
+    });
+
     if(!r.ok){
+      stopTicker(); // revert if server refused
       const j=await r.json().catch(()=>({}));
       alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
       return;
     }
-    const j=await r.json(); // {spinId, result, spinMs}
-    // Spinner’s own wheel will animate precisely via polling/SSE result.
-    // (We avoid starting a separate animation here to keep everyone in perfect sync.)
+
+    // We intentionally do NOT snap here.
+    // Everyone (including the spinner) will stop & snap when the matching popup arrives.
+    // This keeps all tabs perfectly in sync.
   }
 
   /* ---------- Visuals ---------- */
@@ -173,7 +187,7 @@ export default function WheelPage(){
           ))}
         </div>
 
-        {/* RESERVED BANNER SPACE (no layout jump) */}
+        {/* FIXED BANNER SPACE (no layout jump) */}
         <div className="h-8 flex items-center">
           {banner.current.by ? (
             <div className="px-4 py-1 rounded-md bg-amber-500/15 text-amber-300 text-sm">
