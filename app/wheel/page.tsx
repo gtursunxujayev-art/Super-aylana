@@ -19,6 +19,7 @@ export default function WheelPage() {
   const [someoneSpinning, setSomeoneSpinning] = useState<{by: string, mode: number} | null>(null);
   const [popup, setPopup] = useState<Popup | null>(null);
   const wheelRef = useRef<HTMLDivElement>(null);
+  const fallbackTimer = useRef<any>(null);
 
   async function loadMe(){const r=await fetch("/api/me"); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`); if(r.ok) setEntries(await r.json());}
@@ -27,7 +28,7 @@ export default function WheelPage() {
   useEffect(()=>{ loadMe(); loadWins(); }, []);
   useEffect(()=>{ loadEntries(mode); }, [mode]);
 
-  // Fallback polling (kept for reliability)
+  // Polling fallback (also used by the SSE route that polls Redis)
   useEffect(()=>{
     const t=setInterval(async ()=>{
       const r=await fetch("/api/spin/state"); if(!r.ok) return;
@@ -35,11 +36,11 @@ export default function WheelPage() {
       if (j?.status==="SPINNING") setSomeoneSpinning({ by: j.by, mode: j.mode });
       else setSomeoneSpinning(null);
       if (j?.lastPopup) setPopup(j.lastPopup);
-    }, 2000);
+    }, 1000);
     return ()=>clearInterval(t);
   }, []);
 
-  // SSE realtime stream (preferred)
+  // SSE stream (driven by polling route server-side)
   useEffect(()=>{
     const es = new EventSource("/api/spin/stream");
     es.addEventListener("SPIN_START", (e:any)=>{
@@ -51,10 +52,11 @@ export default function WheelPage() {
       setSomeoneSpinning(null);
       setPopup(data.popup);
       loadWins();
-      loadMe(); // update my balance if it was my spin
+      loadMe();
+      if (fallbackTimer.current) { clearTimeout(fallbackTimer.current); fallbackTimer.current = null; }
     });
-    es.addEventListener("ping", ()=>{}); // keep alive
-    es.onerror = () => { /* silence */ };
+    es.addEventListener("ping", ()=>{});
+    es.onerror = () => {};
     return ()=>{ es.close(); };
   }, []);
 
@@ -69,12 +71,25 @@ export default function WheelPage() {
     }
     const j=await r.json();
     const deg=360*8+Math.floor(Math.random()*360);
-    if(wheelRef.current){ wheelRef.current.style.transition=`transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`; wheelRef.current.style.transform=`rotate(${deg}deg)`; }
-    setTimeout(()=>{ setSpinning(false); /* the popup comes from SSE/polling */ }, j.spinMs);
+    if(wheelRef.current){
+      wheelRef.current.style.transition=`transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`;
+      wheelRef.current.style.transform=`rotate(${deg}deg)`;
+    }
+
+    // fallback popup if SSE didn’t arrive for any reason
+    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+    fallbackTimer.current = setTimeout(()=>{
+      setPopup({ user: me?.name ?? "Siz", prize: j.result.type==="another" ? "Yana bir bor aylantirish" : j.result.name, imageUrl: j.result.imageUrl });
+      loadWins();
+      loadMe();
+      fallbackTimer.current = null;
+    }, j.spinMs + 200);
+
+    setTimeout(()=>{ setSpinning(false); }, j.spinMs);
   }
 
   const size=420, cx=size/2, cy=size/2, radius=size/2-6;
-  const count=Math.max(6, entries.length||8);
+  const count=Math.max(8, entries.length||8);
   const sliceAngle=360/count;
   const colors=["#06b6d4","#f59e0b","#22c55e","#60a5fa","#f472b6","#a78bfa","#fb7185","#34d399"];
 
@@ -82,7 +97,6 @@ export default function WheelPage() {
     <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6 items-start">
       {/* LEFT */}
       <div className="flex flex-col items-center gap-4">
-        {/* who is spinning banner */}
         {someoneSpinning && (
           <div className="px-3 py-2 rounded bg-amber-600/20 text-amber-300 text-sm">
             Hozir <b>{someoneSpinning.by}</b> {someoneSpinning.mode} bilan aylantirmoqda…
@@ -136,7 +150,6 @@ export default function WheelPage() {
           </div>
         </div>
 
-        {/* Balance + Spin (+ identity hint so you give coins to correct user) */}
         <div className="flex items-center gap-4">
           <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
           <button disabled={spinning} onClick={spin}
