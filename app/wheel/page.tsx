@@ -28,7 +28,7 @@ type Entry = {
 
 type Win = { id: string; user: string; prize: string; imageUrl?: string | null; time: string };
 
-/* ---------- Geometry helpers for the SVG wheel ---------- */
+/* ---------- Geometry helpers ---------- */
 function deg2rad(d: number) { return (d * Math.PI) / 180; }
 function polar(cx: number, cy: number, r: number, aDeg: number) {
   const a = deg2rad(aDeg);
@@ -41,10 +41,9 @@ function arcPath(cx: number, cy: number, r: number, start: number, end: number) 
 }
 
 /**
- * Compute how much to rotate from current angle so slice index i ends centered at the pointer (top).
- * We draw slices with startAngle = i*slice - 90, so the center for index i is (-90 + i*slice + slice/2).
- * To put that at the top, we want final orientation where center == 0 deg relative to screen top.
- * delta ≡ -center - currentDeg (mod 360). We add 8 spins for drama.
+ * Rotate so slice index i ends centered at the top pointer.
+ * Center(i) = i*slice + slice/2. We want final orientation where (current+delta+center) % 360 == 0.
+ * delta ≡ -center - currentDeg (mod 360). Add 8 full spins for drama.
  */
 function deltaToCenter(i: number, count: number, currentDeg: number) {
   const slice = 360 / count;
@@ -64,12 +63,12 @@ export default function WheelPage() {
   const [someoneSpinning, setSomeoneSpinning] = useState<{ by: string; mode: number } | null>(null);
   const [popup, setPopup] = useState<Popup | null>(null);
 
-  /* ----- refs (imperative) ----- */
+  /* ----- refs ----- */
   const wheelRef = useRef<HTMLDivElement>(null);
   const rot = useRef<number>(0);                  // cumulative rotation
   const fallTimer = useRef<any>(null);            // fallback popup timer (for local spinner)
-  const extTicker = useRef<any>(null);            // continuous rotation ticker (when someone else is spinning)
-  const viewLocked = useRef<boolean>(false);      // lock buttons while someone else is spinning
+  const extTicker = useRef<any>(null);            // continuous rotation when someone else spins
+  const viewLocked = useRef<boolean>(false);      // lock mode buttons during external spin
   const lastPopupHash = useRef<string>("");       // de-dupe popups
   const lastResultHandled = useRef<string>("");   // de-dupe result animation (poll/SSE)
 
@@ -83,7 +82,7 @@ export default function WheelPage() {
     if (r.ok) setEntries(await r.json());
   }
   async function loadWins() {
-    // FIX: correct route is /api/recent-wins (not /api/feed/recent-wins)
+    // Use your actual route for recent wins
     const r = await fetch("/api/recent-wins", { cache: "no-store" });
     if (r.ok) setWins(await r.json());
   }
@@ -100,11 +99,7 @@ export default function WheelPage() {
     }
   }
 
-  /** animatePrecisely(prizeName, prizeMode)
-   *  - stops continuous rotation (if any)
-   *  - ensures correct entries for prizeMode
-   *  - rotates to the exact center of the winning slice
-   */
+  /** animatePrecisely(prizeName, prizeMode) — stop ext spin and land exactly on the winning slice */
   async function animatePrecisely(prizeName: string, prizeMode?: 50 | 100 | 200) {
     if (prizeMode && prizeMode !== mode) {
       setMode(prizeMode);
@@ -118,18 +113,16 @@ export default function WheelPage() {
       );
       const delta = deltaToCenter(idx === -1 ? 0 : idx, count, rot.current);
       rot.current += delta;
-      // snap nicely
       wheelRef.current.style.transition = `transform 1.2s cubic-bezier(.2,.9,.2,1)`;
       wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
     }
   }
 
-  /** stopExternalSpin() — clears the external ticker if running */
   function stopExternalSpin() {
     if (extTicker.current) { clearInterval(extTicker.current); extTicker.current = null; }
   }
 
-  /* ----- Polling drives banners + popup for all clients (reliable everywhere) ----- */
+  /* ----- Polling: drives banners + popup for ALL clients (works even if SSE is blocked) ----- */
   useEffect(() => {
     let stopped = false;
 
@@ -147,7 +140,7 @@ export default function WheelPage() {
           }
           setSomeoneSpinning({ by: j.by, mode: j.mode ?? mode });
 
-          // start continuous rotation if not spinning locally
+          // keep rotating smoothly while someone else spins
           if (!spinning && !extTicker.current && wheelRef.current) {
             extTicker.current = setInterval(() => {
               rot.current += 360;
@@ -159,7 +152,7 @@ export default function WheelPage() {
           setSomeoneSpinning(null);
         }
 
-        // If a new popup appears via polling, animate + show it (even without SSE)
+        // Handle result via polling (even if SSE didn’t fire)
         if (j?.lastPopup) {
           const key = JSON.stringify(j.lastPopup);
           if (key !== lastResultHandled.current) {
@@ -172,7 +165,7 @@ export default function WheelPage() {
           }
         }
       } catch { /* ignore */ }
-      if (!stopped) setTimeout(tick, 600); // steady cadence, avoids setInterval drift
+      if (!stopped) setTimeout(tick, 600);
     };
 
     tick();
@@ -182,7 +175,7 @@ export default function WheelPage() {
     };
   }, [mode, spinning, entries.length]);
 
-  /* ----- SSE (optional enhancement; polling already covers the UX) ----- */
+  /* ----- SSE (nice-to-have; polling already ensures cross-user UX) ----- */
   useEffect(() => {
     const es = new EventSource("/api/spin/stream");
 
@@ -224,7 +217,7 @@ export default function WheelPage() {
     return () => { es.close(); };
   }, [entries, mode, spinning]);
 
-  /* ----- Local spin (the player who clicks) ----- */
+  /* ----- Local spin (the user who clicks) ----- */
   async function spin() {
     if (spinning) return;
     setSpinning(true);
@@ -250,7 +243,7 @@ export default function WheelPage() {
 
     const j = await r.json();
 
-    // Aim precisely to the winner for the local spinner
+    // precise aim for the local spinner
     if (wheelRef.current && entries.length) {
       const count = Math.max(8, entries.length);
       const name = String(j.result.name);
@@ -264,7 +257,7 @@ export default function WheelPage() {
       wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
     }
 
-    // Fallback popup (in case SSE/polling is late)
+    // fallback popup (just in case polling/SSE is late)
     if (fallTimer.current) clearTimeout(fallTimer.current);
     fallTimer.current = setTimeout(() => {
       const p: Popup = {
@@ -283,7 +276,7 @@ export default function WheelPage() {
     setTimeout(() => { setSpinning(false); }, j.spinMs);
   }
 
-  /* ----- Wheel visual ----- */
+  /* ----- Visuals ----- */
   const size = 420, cx = size / 2, cy = size / 2, radius = size / 2 - 6;
   const count = Math.max(8, entries.length || 8);
   const sliceAngle = 360 / count;
@@ -293,12 +286,7 @@ export default function WheelPage() {
     <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6 items-start">
       {/* LEFT column */}
       <div className="flex flex-col items-center gap-4">
-        {someoneSpinning && (
-          <div className="px-3 py-2 rounded bg-amber-600/20 text-amber-300 text-sm">
-            Hozir <b>{someoneSpinning.by}</b> {someoneSpinning.mode} bilan aylantirmoqda…
-          </div>
-        )}
-
+        {/* MODE BUTTONS */}
         <div className="flex gap-2">
           {[50, 100, 200].map((m) => (
             <button
@@ -312,6 +300,14 @@ export default function WheelPage() {
           ))}
         </div>
 
+        {/* BANNER — EXACTLY BETWEEN BUTTONS AND WHEEL */}
+        {someoneSpinning && (
+          <div className="px-4 py-2 rounded-xl bg-amber-500/15 text-amber-300 text-base">
+            <b>{someoneSpinning.by}</b> aylantiryapti…
+          </div>
+        )}
+
+        {/* WHEEL */}
         <div className="relative">
           {/* Pointer */}
           <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[14px] border-r-[14px] border-b-[28px] border-l-transparent border-r-transparent border-b-yellow-400 drop-shadow" />
