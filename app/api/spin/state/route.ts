@@ -11,20 +11,23 @@ export async function GET() {
       redis.get<string>(REDIS_LAST_POP_KEY),
     ]);
 
-    const state = stateRaw ? JSON.parse(stateRaw) : { status: "IDLE" };
-    const lastPopup = popRaw ? JSON.parse(popRaw) : null;
+    const body = {
+      ...(stateRaw ? JSON.parse(stateRaw) : { status: "IDLE" }),
+      lastPopup: popRaw ? JSON.parse(popRaw) : null,
+      _ts: Date.now(),
+    };
 
-    return new NextResponse(JSON.stringify({ ...state, lastPopup }), {
+    return new NextResponse(JSON.stringify(body), {
       status: 200,
       headers: {
         "Content-Type": "application/json",
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        "Pragma": "no-cache",
-        "Expires": "0",
+        Pragma: "no-cache",
+        Expires: "0",
       },
     });
   } catch {
-    return new NextResponse(JSON.stringify({ status: "IDLE", lastPopup: null }), {
+    return new NextResponse(JSON.stringify({ status: "IDLE", lastPopup: null, _ts: Date.now() }), {
       status: 200,
       headers: { "Cache-Control": "no-store", "Content-Type": "application/json" },
     });
