@@ -5,20 +5,18 @@ import { NextResponse } from "next/server";
 import { redis, REDIS_STATE_KEY, REDIS_LAST_POP_KEY, REDIS_VER_KEY } from "@/app/lib/redis";
 
 export async function GET() {
-  const encoder = new TextEncoder();
+  const enc = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
       let lastVer = -1;
-      const write = (event: string, data: any) => {
-        controller.enqueue(encoder.encode(`event: ${event}\n`));
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+
+      const push = (event: string, data: any) => {
+        controller.enqueue(enc.encode(`event: ${event}\n`));
+        controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
-      // Send an initial ping so the connection is considered "open"
-      write("ping", { t: Date.now() });
-
-      const interval = setInterval(async () => {
+      const timer = setInterval(async () => {
         try {
           const ver = (await redis.get<number>(REDIS_VER_KEY)) ?? 0;
           if (ver !== lastVer) {
@@ -28,35 +26,29 @@ export async function GET() {
               redis.get<string>(REDIS_STATE_KEY),
               redis.get<string>(REDIS_LAST_POP_KEY),
             ]);
-
-            const state = stateRaw ? JSON.parse(stateRaw) : { status: "IDLE" };
+            const state = stateRaw ? JSON.parse(stateRaw) : { status: "IDLE", spinId: null };
             const popup = popRaw ? JSON.parse(popRaw) : null;
 
-            if (state?.status === "SPINNING") {
-              write("SPIN_START", { by: state.by, mode: state.mode, startedAt: state.startedAt });
+            if (state?.status === "SPINNING" && state.spinId) {
+              push("SPIN_START", state); // {spinId, by, mode, startedAt}
             } else {
-              write("SPIN_IDLE", {});
+              push("SPIN_IDLE", {});
             }
-
-            if (popup) {
-              write("SPIN_RESULT", { popup });
+            if (popup?.spinId) {
+              push("SPIN_RESULT", { popup }); // {popup:{spinId,...}}
             }
           } else {
-            write("ping", { t: Date.now() });
+            push("ping", { t: Date.now() });
           }
         } catch (e) {
-          write("ping", { err: String(e) });
+          push("ping", { err: String(e) });
         }
-      }, 700);
+      }, 600);
 
-      const closer = () => clearInterval(interval);
-      // @ts-ignore
-      controller._closer = closer;
+      (controller as any)._close = () => clearInterval(timer);
+      push("ping", { boot: Date.now() });
     },
-    cancel() {
-      // @ts-ignore
-      if (typeof (this as any)?._closer === "function") (this as any)._closer();
-    },
+    cancel() { try { (this as any)?._close?.(); } catch {} },
   });
 
   return new NextResponse(stream, {
