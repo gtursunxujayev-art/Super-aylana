@@ -20,6 +20,7 @@ model User {
 
   rewards   Reward[]
   txns      CoinTxn[]
+  spins     SpinAudit[]
 }
 
 model Item {
@@ -28,6 +29,8 @@ model Item {
   price     Int
   imageUrl  String?
   active    Boolean  @default(true)
+  /** Base weight used when item price == mode (for odds editor) */
+  weight    Int      @default(10)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -42,8 +45,9 @@ model Reward {
   item      Item?    @relation(fields: [itemId], references: [id])
   itemId    String?
   mode      Int
-  result    String   // item name or "another_spin"
+  result    String   // "another_spin" or item name or "buy:<name>"
   imageUrl  String?
+  status    RewardStatus @default(PENDING)
   createdAt DateTime @default(now())
 }
 
@@ -64,7 +68,35 @@ model CoinTxn {
   createdAt DateTime @default(now())
 }
 
+model GiftCode {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  amount         Int
+  maxRedemptions Int      @default(1)
+  redeemedCount  Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model SpinAudit {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  mode      Int
+  seed      String   // server RNG seed
+  entries   Json     // entries + weights snapshot
+  picked    String   // picked entry name / id
+  createdAt DateTime @default(now())
+}
+
 enum Role {
   USER
+  MODERATOR
   ADMIN
+}
+
+enum RewardStatus {
+  PENDING
+  DELIVERED
 }
