@@ -1,18 +1,14 @@
 'use client';
 import { useEffect, useRef, useState } from "react";
 
-type Me = { id: string; name: string; balance: number; role: string };
+type Me = { id: string; name: string; balance: number; role: string; login?: string };
 type Popup = { user: string; prize: string; imageUrl?: string | null };
 type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item"|"another" };
 type Win = { id: string; user: string; prize: string; imageUrl?: string|null; time: string };
 
 function deg2rad(d:number){return (d*Math.PI)/180}
 function polar(cx:number, cy:number, r:number, aDeg:number){const a=deg2rad(aDeg);return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)}}
-function arcPath(cx:number,cy:number,r:number,start:number,end:number){
-  const s=polar(cx,cy,r,start), e=polar(cx,cy,r,end);
-  const large = end-start<=180?0:1;
-  return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`
-}
+function arcPath(cx:number,cy:number,r:number,start:number,end:number){const s=polar(cx,cy,r,start),e=polar(cx,cy,r,end);const large=end-start<=180?0:1;return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`}
 
 export default function WheelPage() {
   const [me, setMe] = useState<Me | null>(null);
@@ -20,6 +16,7 @@ export default function WheelPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [wins, setWins] = useState<Win[]>([]);
   const [spinning, setSpinning] = useState(false);
+  const [someoneSpinning, setSomeoneSpinning] = useState<{by: string, mode: number} | null>(null);
   const [popup, setPopup] = useState<Popup | null>(null);
   const wheelRef = useRef<HTMLDivElement>(null);
 
@@ -29,17 +26,36 @@ export default function WheelPage() {
 
   useEffect(()=>{ loadMe(); loadWins(); }, []);
   useEffect(()=>{ loadEntries(mode); }, [mode]);
+
+  // Fallback polling (kept for reliability)
   useEffect(()=>{
-    const t=setInterval(loadWins, 3000);
+    const t=setInterval(async ()=>{
+      const r=await fetch("/api/spin/state"); if(!r.ok) return;
+      const j=await r.json();
+      if (j?.status==="SPINNING") setSomeoneSpinning({ by: j.by, mode: j.mode });
+      else setSomeoneSpinning(null);
+      if (j?.lastPopup) setPopup(j.lastPopup);
+    }, 2000);
     return ()=>clearInterval(t);
   }, []);
 
+  // SSE realtime stream (preferred)
   useEffect(()=>{
-    const t=setInterval(async ()=>{
-      const r=await fetch("/api/spin/state"); const j=await r.json();
-      if(j.lastPopup) setPopup(j.lastPopup);
-    }, 1000);
-    return ()=>clearInterval(t);
+    const es = new EventSource("/api/spin/stream");
+    es.addEventListener("SPIN_START", (e:any)=>{
+      const data = JSON.parse(e.data);
+      setSomeoneSpinning({ by: data.by, mode: data.mode });
+    });
+    es.addEventListener("SPIN_RESULT", (e:any)=>{
+      const data = JSON.parse(e.data);
+      setSomeoneSpinning(null);
+      setPopup(data.popup);
+      loadWins();
+      loadMe(); // update my balance if it was my spin
+    });
+    es.addEventListener("ping", ()=>{}); // keep alive
+    es.onerror = () => { /* silence */ };
+    return ()=>{ es.close(); };
   }, []);
 
   async function spin(){
@@ -54,7 +70,7 @@ export default function WheelPage() {
     const j=await r.json();
     const deg=360*8+Math.floor(Math.random()*360);
     if(wheelRef.current){ wheelRef.current.style.transition=`transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`; wheelRef.current.style.transform=`rotate(${deg}deg)`; }
-    setTimeout(()=>{ setSpinning(false); loadMe(); setPopup({user:me?.name??"Siz", prize:j.result.type==="another"?"Yana bir bor aylantirish":j.result.name, imageUrl:j.result.imageUrl}); loadWins(); }, j.spinMs);
+    setTimeout(()=>{ setSpinning(false); /* the popup comes from SSE/polling */ }, j.spinMs);
   }
 
   const size=420, cx=size/2, cy=size/2, radius=size/2-6;
@@ -64,8 +80,15 @@ export default function WheelPage() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6 items-start">
-      {/* LEFT: Wheel */}
-      <div className="flex flex-col items-center gap-6">
+      {/* LEFT */}
+      <div className="flex flex-col items-center gap-4">
+        {/* who is spinning banner */}
+        {someoneSpinning && (
+          <div className="px-3 py-2 rounded bg-amber-600/20 text-amber-300 text-sm">
+            Hozir <b>{someoneSpinning.by}</b> {someoneSpinning.mode} bilan aylantirmoqda…
+          </div>
+        )}
+
         <div className="flex gap-2">
           {[50,100,200].map(m=>(
             <button key={m} onClick={()=>setMode(m as 50|100|200)}
@@ -113,6 +136,7 @@ export default function WheelPage() {
           </div>
         </div>
 
+        {/* Balance + Spin (+ identity hint so you give coins to correct user) */}
         <div className="flex items-center gap-4">
           <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
           <button disabled={spinning} onClick={spin}
@@ -120,9 +144,12 @@ export default function WheelPage() {
             {spinning ? "Aylanyapti..." : `Spin (${mode})`}
           </button>
         </div>
+        <div className="text-xs text-neutral-400">
+          Logged in as: <b>{me?.name}</b> (login: <b>{me?.login}</b>)
+        </div>
       </div>
 
-      {/* RIGHT: Recent wins feed */}
+      {/* RIGHT: Recent wins */}
       <div className="w-full lg:w-[320px]">
         <div className="text-lg font-semibold mb-3">So‘nggi yutuqlar</div>
         <div className="space-y-3">
