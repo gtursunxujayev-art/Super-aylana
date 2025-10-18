@@ -9,6 +9,10 @@ export const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
+// Keys
 export const REDIS_LOCK_KEY = "sa:spin:lock";
 export const REDIS_STATE_KEY = "sa:spin:state";
 export const REDIS_LAST_POP_KEY = "sa:spin:lastpopup";
+
+// Pub/Sub channel (for realtime)
+export const REDIS_SPIN_CHANNEL = "sa:spin:events";
