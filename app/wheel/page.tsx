@@ -18,8 +18,11 @@ export default function WheelPage() {
   const [spinning, setSpinning] = useState(false);
   const [someoneSpinning, setSomeoneSpinning] = useState<{by: string, mode: number} | null>(null);
   const [popup, setPopup] = useState<Popup | null>(null);
+
   const wheelRef = useRef<HTMLDivElement>(null);
   const fallbackTimer = useRef<any>(null);
+  const rot = useRef<number>(0);            // <- cumulative rotation
+  const lastPopupHash = useRef<string>(""); // <- de-dupe popups
 
   async function loadMe(){const r=await fetch("/api/me"); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`); if(r.ok) setEntries(await r.json());}
@@ -28,35 +31,49 @@ export default function WheelPage() {
   useEffect(()=>{ loadMe(); loadWins(); }, []);
   useEffect(()=>{ loadEntries(mode); }, [mode]);
 
-  // Polling fallback (also used by the SSE route that polls Redis)
+  // Helper to safely show popup once
+  function showPopupOnce(p: Popup){
+    const hash = JSON.stringify(p);
+    if (hash !== lastPopupHash.current) {
+      lastPopupHash.current = hash;
+      setPopup(p);
+    }
+  }
+
+  // Client polling (drives everyone’s banner + popup)
   useEffect(()=>{
     const t=setInterval(async ()=>{
-      const r=await fetch("/api/spin/state"); if(!r.ok) return;
+      const r=await fetch("/api/spin/state",{ cache: "no-store" });
+      if(!r.ok) return;
       const j=await r.json();
-      if (j?.status==="SPINNING") setSomeoneSpinning({ by: j.by, mode: j.mode });
-      else setSomeoneSpinning(null);
-      if (j?.lastPopup) setPopup(j.lastPopup);
-    }, 1000);
-    return ()=>clearInterval(t);
-  }, []);
 
-  // SSE stream (driven by polling route server-side)
+      if (j?.status === "SPINNING" && j?.by) {
+        setSomeoneSpinning({ by: j.by, mode: j.mode ?? mode });
+      } else {
+        setSomeoneSpinning(null);
+      }
+
+      if (j?.lastPopup) showPopupOnce(j.lastPopup);
+    }, 700);
+    return ()=>clearInterval(t);
+  }, [mode]);
+
+  // SSE stream (optional; if it drops, polling still works)
   useEffect(()=>{
     const es = new EventSource("/api/spin/stream");
     es.addEventListener("SPIN_START", (e:any)=>{
       const data = JSON.parse(e.data);
-      setSomeoneSpinning({ by: data.by, mode: data.mode });
+      if (data?.by) setSomeoneSpinning({ by: data.by, mode: data.mode });
     });
     es.addEventListener("SPIN_RESULT", (e:any)=>{
       const data = JSON.parse(e.data);
+      if (data?.popup) showPopupOnce(data.popup);
       setSomeoneSpinning(null);
-      setPopup(data.popup);
       loadWins();
       loadMe();
-      if (fallbackTimer.current) { clearTimeout(fallbackTimer.current); fallbackTimer.current = null; }
     });
     es.addEventListener("ping", ()=>{});
-    es.onerror = () => {};
+    es.onerror = () => {}; // silent retry
     return ()=>{ es.close(); };
   }, []);
 
@@ -70,16 +87,22 @@ export default function WheelPage() {
       setSpinning(false); return;
     }
     const j=await r.json();
-    const deg=360*8+Math.floor(Math.random()*360);
+    // Always add a big delta to the cumulative rotation
+    const delta = 360*8 + Math.floor(Math.random()*360);
+    rot.current += delta;
     if(wheelRef.current){
       wheelRef.current.style.transition=`transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`;
-      wheelRef.current.style.transform=`rotate(${deg}deg)`;
+      wheelRef.current.style.transform=`rotate(${rot.current}deg)`;
     }
 
-    // fallback popup if SSE didn’t arrive for any reason
+    // Fallback popup for the spinner's own window (in case SSE/polling is late)
     if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
     fallbackTimer.current = setTimeout(()=>{
-      setPopup({ user: me?.name ?? "Siz", prize: j.result.type==="another" ? "Yana bir bor aylantirish" : j.result.name, imageUrl: j.result.imageUrl });
+      showPopupOnce({
+        user: me?.name ?? "Siz",
+        prize: j.result.type==="another" ? "Yana bir bor aylantirish" : j.result.name,
+        imageUrl: j.result.imageUrl
+      });
       loadWins();
       loadMe();
       fallbackTimer.current = null;
