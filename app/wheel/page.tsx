@@ -67,14 +67,15 @@ export default function WheelPage() {
   /* ----- refs (imperative) ----- */
   const wheelRef = useRef<HTMLDivElement>(null);
   const rot = useRef<number>(0);                  // cumulative rotation
-  const fallTimer = useRef<any>(null);            // fallback popup timer
+  const fallTimer = useRef<any>(null);            // fallback popup timer (for local spinner)
   const extTicker = useRef<any>(null);            // continuous rotation ticker (when someone else is spinning)
   const viewLocked = useRef<boolean>(false);      // lock buttons while someone else is spinning
   const lastPopupHash = useRef<string>("");       // de-dupe popups
+  const lastResultHandled = useRef<string>("");   // de-dupe result animation (poll/SSE)
 
   /* ----- loaders ----- */
   async function loadMe() {
-    const r = await fetch("/api/me");
+    const r = await fetch("/api/me", { cache: "no-store" });
     if (r.ok) setMe(await r.json());
   }
   async function loadEntries(m: 50 | 100 | 200) {
@@ -82,7 +83,8 @@ export default function WheelPage() {
     if (r.ok) setEntries(await r.json());
   }
   async function loadWins() {
-    const r = await fetch("/api/feed/recent-wins", { cache: "no-store" });
+    // FIX: correct route is /api/recent-wins (not /api/feed/recent-wins)
+    const r = await fetch("/api/recent-wins", { cache: "no-store" });
     if (r.ok) setWins(await r.json());
   }
 
@@ -98,9 +100,39 @@ export default function WheelPage() {
     }
   }
 
+  /** animatePrecisely(prizeName, prizeMode)
+   *  - stops continuous rotation (if any)
+   *  - ensures correct entries for prizeMode
+   *  - rotates to the exact center of the winning slice
+   */
+  async function animatePrecisely(prizeName: string, prizeMode?: 50 | 100 | 200) {
+    if (prizeMode && prizeMode !== mode) {
+      setMode(prizeMode);
+      await loadEntries(prizeMode);
+    }
+    if (wheelRef.current && entries.length) {
+      const count = Math.max(8, entries.length);
+      const idx = Math.max(
+        0,
+        entries.findIndex(e => e.name === prizeName || (prizeName?.includes("Yana") && e.kind === "another"))
+      );
+      const delta = deltaToCenter(idx === -1 ? 0 : idx, count, rot.current);
+      rot.current += delta;
+      // snap nicely
+      wheelRef.current.style.transition = `transform 1.2s cubic-bezier(.2,.9,.2,1)`;
+      wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
+    }
+  }
+
+  /** stopExternalSpin() — clears the external ticker if running */
+  function stopExternalSpin() {
+    if (extTicker.current) { clearInterval(extTicker.current); extTicker.current = null; }
+  }
+
   /* ----- Polling drives banners + popup for all clients (reliable everywhere) ----- */
   useEffect(() => {
     let stopped = false;
+
     const tick = async () => {
       try {
         const r = await fetch("/api/spin/state", { cache: "no-store" });
@@ -109,7 +141,6 @@ export default function WheelPage() {
 
         if (j?.status === "SPINNING" && j?.by) {
           viewLocked.current = true;
-          // sync wheel mode to external spinner
           if (j.mode && j.mode !== mode) {
             setMode(j.mode);
             await loadEntries(j.mode);
@@ -128,20 +159,33 @@ export default function WheelPage() {
           setSomeoneSpinning(null);
         }
 
-        if (j?.lastPopup) showPopupOnce(j.lastPopup);
+        // If a new popup appears via polling, animate + show it (even without SSE)
+        if (j?.lastPopup) {
+          const key = JSON.stringify(j.lastPopup);
+          if (key !== lastResultHandled.current) {
+            lastResultHandled.current = key;
+            stopExternalSpin();
+            await animatePrecisely(j.lastPopup.prize, j.lastPopup.mode);
+            showPopupOnce(j.lastPopup);
+            loadWins(); loadMe();
+            viewLocked.current = false;
+          }
+        }
       } catch { /* ignore */ }
       if (!stopped) setTimeout(tick, 600); // steady cadence, avoids setInterval drift
     };
+
     tick();
     return () => {
       stopped = true;
-      if (extTicker.current) { clearInterval(extTicker.current); extTicker.current = null; }
+      stopExternalSpin();
     };
-  }, [mode, spinning]);
+  }, [mode, spinning, entries.length]);
 
   /* ----- SSE (optional enhancement; polling already covers the UX) ----- */
   useEffect(() => {
     const es = new EventSource("/api/spin/stream");
+
     es.addEventListener("SPIN_START", async (e: any) => {
       const data = JSON.parse(e.data);
       viewLocked.current = true;
@@ -159,39 +203,28 @@ export default function WheelPage() {
         }, 700);
       }
     });
+
     es.addEventListener("SPIN_RESULT", async (e: any) => {
       const data = JSON.parse(e.data);
-
-      // stop continuous rotation
-      if (extTicker.current) { clearInterval(extTicker.current); extTicker.current = null; }
-
-      // snap to the exact winning slice for viewers
-      const prizeName: string | undefined = data?.popup?.prize?.toString();
-      const prizeMode: 50 | 100 | 200 | undefined = data?.popup?.mode;
-      if (prizeMode && prizeMode !== mode) { setMode(prizeMode); await loadEntries(prizeMode); }
-      if (prizeName && wheelRef.current && entries.length) {
-        const i = Math.max(
-          0,
-          entries.findIndex(e => e.name === prizeName || (prizeName.includes("Yana") && e.kind === "another"))
-        );
-        const count = Math.max(entries.length, 8);
-        const delta = deltaToCenter(i === -1 ? 0 : i, count, rot.current);
-        rot.current += delta;
-        wheelRef.current.style.transition = `transform 1.2s cubic-bezier(.2,.9,.2,1)`;
-        wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
+      const key = JSON.stringify(data?.popup || {});
+      if (key !== lastResultHandled.current) {
+        lastResultHandled.current = key;
+        stopExternalSpin();
+        await animatePrecisely(data?.popup?.prize, data?.popup?.mode);
+        showPopupOnce(data.popup);
+        loadWins(); loadMe();
+        viewLocked.current = false;
+        setSomeoneSpinning(null);
       }
-
-      showPopupOnce(data.popup);
-      loadWins(); loadMe();
-      viewLocked.current = false;
-      setSomeoneSpinning(null);
     });
+
     es.addEventListener("ping", () => {});
     es.onerror = () => {}; // silent retries
+
     return () => { es.close(); };
   }, [entries, mode, spinning]);
 
-  /* ----- Local spin ----- */
+  /* ----- Local spin (the player who clicks) ----- */
   async function spin() {
     if (spinning) return;
     setSpinning(true);
@@ -217,7 +250,7 @@ export default function WheelPage() {
 
     const j = await r.json();
 
-    // aim precisely for spinner himself
+    // Aim precisely to the winner for the local spinner
     if (wheelRef.current && entries.length) {
       const count = Math.max(8, entries.length);
       const name = String(j.result.name);
@@ -231,15 +264,17 @@ export default function WheelPage() {
       wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
     }
 
-    // fallback popup (in case SSE/polling is late)
+    // Fallback popup (in case SSE/polling is late)
     if (fallTimer.current) clearTimeout(fallTimer.current);
     fallTimer.current = setTimeout(() => {
-      showPopupOnce({
+      const p: Popup = {
         user: me?.name ?? "Siz",
         prize: j.result.type === "another" ? "Yana bir bor aylantirish" : j.result.name,
         imageUrl: j.result.imageUrl,
         mode,
-      });
+      };
+      lastResultHandled.current = JSON.stringify(p);
+      showPopupOnce(p);
       loadWins(); loadMe();
       fallTimer.current = null;
       viewLocked.current = false;
