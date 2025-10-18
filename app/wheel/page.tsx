@@ -4,232 +4,183 @@ import { useEffect, useRef, useState } from "react";
 
 /* ---------- Types ---------- */
 type Me = { id: string; name: string; balance: number; role: string; login?: string };
-type Popup = { user: string; prize: string; imageUrl?: string | null; mode?: 50 | 100 | 200 };
+type Popup = { spinId: string; user: string; prize: string; imageUrl?: string | null; mode?: 50|100|200 };
 type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item" | "another" };
 type Win = { id: string; user: string; prize: string; imageUrl?: string | null; time: string };
 
-/* ---------- Geometry helpers ---------- */
-function deg2rad(d: number) { return (d * Math.PI) / 180; }
-function polar(cx: number, cy: number, r: number, aDeg: number) {
-  const a = deg2rad(aDeg);
-  return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
-}
-function arcPath(cx: number, cy: number, r: number, start: number, end: number) {
-  const s = polar(cx, cy, r, start), e = polar(cx, cy, r, end);
-  const large = end - start <= 180 ? 0 : 1;
-  return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`;
-}
-function deltaToCenter(i: number, count: number, currentDeg: number) {
-  const slice = 360 / count;
-  const center = i * slice + slice / 2;
-  const mod = ((-center - (currentDeg % 360)) % 360 + 360) % 360;
-  return 360 * 8 + mod;
-}
+/* ---------- Geometry ---------- */
+function deg2rad(d:number){return d*Math.PI/180;}
+function polar(cx:number,cy:number,r:number,aDeg:number){const a=deg2rad(aDeg);return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)};}
+function arcPath(cx:number,cy:number,r:number,start:number,end:number){const s=polar(cx,cy,r,start),e=polar(cx,cy,r,end);const large=end-start<=180?0:1;return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`; }
+function deltaToCenter(i:number,count:number,currentDeg:number){const slice=360/count;const center=i*slice+slice/2;const mod=(( -center - (currentDeg%360) )%360+360)%360;return 360*8+mod;}
 
-/* ========== Component ========== */
-export default function WheelPage() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [mode, setMode] = useState<50 | 100 | 200>(100);
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [wins, setWins] = useState<Win[]>([]);
-  const [spinning, setSpinning] = useState(false);
-  const [someoneSpinning, setSomeoneSpinning] = useState<{ by: string; mode: number } | null>(null);
-  const [popup, setPopup] = useState<Popup | null>(null);
+/* ---------- Component ---------- */
+export default function WheelPage(){
+  const [me,setMe]=useState<Me|null>(null);
+  const [mode,setMode]=useState<50|100|200>(100);
+  const [entries,setEntries]=useState<Entry[]>([]);
+  const [wins,setWins]=useState<Win[]>([]);
+  const [popup,setPopup]=useState<Popup|null>(null);
 
-  const wheelRef = useRef<HTMLDivElement>(null);
-  const rot = useRef<number>(0);
-  const fallTimer = useRef<any>(null);
-  const extTicker = useRef<any>(null);
-  const viewLocked = useRef<boolean>(false);
-  const lastPopupHash = useRef<string>("");
-  const lastResultHandled = useRef<string>("");
+  const wheelRef=useRef<HTMLDivElement>(null);
+  const rot=useRef(0);
+  const ticker=useRef<any>(null);
+
+  const globalSpinId=useRef<string|null>(null);     // latest spinId seen globally
+  const banner=useRef<{by:string|null,mode:number|null}>({by:null,mode:null});
+  const lastPopupKey=useRef<string>("");
 
   async function loadMe(){const r=await fetch("/api/me",{cache:"no-store"}); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`,{cache:"no-store"}); if(r.ok) setEntries(await r.json());}
   async function loadWins(){const r=await fetch("/api/recent-wins",{cache:"no-store"}); if(r.ok) setWins(await r.json());}
 
   useEffect(()=>{ loadMe(); loadWins(); },[]);
-  useEffect(()=>{ if(!viewLocked.current) loadEntries(mode); },[mode]);
+  useEffect(()=>{ loadEntries(mode); },[mode]);
 
-  function showPopupOnce(p: Popup){
-    const hash = JSON.stringify(p);
-    if (hash !== lastPopupHash.current) {
-      lastPopupHash.current = hash;
-      setPopup(p);
-    }
+  function ensureTicker(){
+    if (ticker.current || !wheelRef.current) return;
+    ticker.current = setInterval(()=>{
+      rot.current += 360;
+      wheelRef.current!.style.transition = `transform 0.7s linear`;
+      wheelRef.current!.style.transform  = `rotate(${rot.current}deg)`;
+    },700);
   }
-  function stopExternalSpin(){ if (extTicker.current) { clearInterval(extTicker.current); extTicker.current = null; } }
+  function stopTicker(){ if (ticker.current){ clearInterval(ticker.current); ticker.current=null; } }
 
-  async function animatePrecisely(prizeName: string, prizeMode?: 50|100|200){
+  async function animateToPrize(prizeName:string, prizeMode?:50|100|200){
     if (prizeMode && prizeMode !== mode) { setMode(prizeMode); await loadEntries(prizeMode); }
-    if (wheelRef.current && entries.length) {
-      const count = Math.max(8, entries.length);
-      const idx = Math.max(0, entries.findIndex(e=>e.name===prizeName || (prizeName?.includes("Yana") && e.kind==="another")));
-      const delta = deltaToCenter(idx === -1 ? 0 : idx, count, rot.current);
-      rot.current += delta;
-      wheelRef.current.style.transition = `transform 1.2s cubic-bezier(.2,.9,.2,1)`;
-      wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
-    }
+    if (!wheelRef.current || !entries.length) return;
+    const count=Math.max(8,entries.length);
+    const idx=Math.max(0,entries.findIndex(e=>e.name===prizeName || (prizeName.includes("Yana") && e.kind==="another")));
+    const delta=deltaToCenter(idx===-1?0:idx,count,rot.current);
+    rot.current+=delta;
+    wheelRef.current.style.transition=`transform 1.2s cubic-bezier(.2,.9,.2,1)`;
+    wheelRef.current.style.transform =`rotate(${rot.current}deg)`;
   }
 
-  /* ----- POLLING: universal fallback (no cache) ----- */
+  function showPopupOnce(p:Popup){
+    const key=JSON.stringify(p);
+    if (key!==lastPopupKey.current){ lastPopupKey.current=key; setPopup(p); }
+  }
+
+  /* ---------- Polling: single source of truth ---------- */
   useEffect(()=>{
-    let stopped = false;
-    const tick = async ()=>{
-      try {
-        const r = await fetch("/api/spin/state",{cache:"no-store"});
-        if (!r.ok) return;
-        const j = await r.json();
+    let stop=false;
+    const tick=async ()=>{
+      try{
+        const r=await fetch("/api/spin/state",{cache:"no-store"});
+        if(!r.ok) return;
+        const { state, lastPopup } = await r.json();
 
-        if (j?.status === "SPINNING" && j?.by) {
-          viewLocked.current = true;
-          if (j.mode && j.mode !== mode) { setMode(j.mode); await loadEntries(j.mode); }
-          setSomeoneSpinning({ by: j.by, mode: j.mode ?? mode });
-
-          // start continuous rotation for viewers
-          if (!spinning && !extTicker.current && wheelRef.current) {
-            extTicker.current = setInterval(()=>{
-              rot.current += 360;
-              wheelRef.current!.style.transition = `transform 0.7s linear`;
-              wheelRef.current!.style.transform = `rotate(${rot.current}deg)`;
-            }, 700);
+        // New spin?
+        if (state?.status==="SPINNING" && state.spinId){
+          if (globalSpinId.current !== state.spinId){
+            globalSpinId.current = state.spinId;
+            banner.current = { by: state.by ?? null, mode: state.mode ?? null };
+            // lock mode visually to spinner mode (but we don't move buttons)
+            if (state.mode && state.mode !== mode) { setMode(state.mode); await loadEntries(state.mode); }
+            ensureTicker(); // start clean ticker once
+          } else {
+            // keep banner fresh
+            banner.current = { by: state.by ?? null, mode: state.mode ?? null };
           }
         } else {
-          setSomeoneSpinning(null);
+          // no active spin; do not kill ticker yet (result may come right after)
+          if (!lastPopup) stopTicker();
+          if (!lastPopup) { banner.current = { by: null, mode: null }; }
         }
 
-        // if popup arrived via polling, handle it (even without SSE)
-        if (j?.lastPopup) {
-          const key = JSON.stringify(j.lastPopup);
-          if (key !== lastResultHandled.current) {
-            lastResultHandled.current = key;
-            stopExternalSpin();
-            await animatePrecisely(j.lastPopup.prize, j.lastPopup.mode);
-            showPopupOnce(j.lastPopup);
-            loadWins(); loadMe();
-            viewLocked.current = false;
-          }
+        // Result?
+        if (lastPopup?.spinId && lastPopup.spinId === globalSpinId.current){
+          stopTicker();
+          await animateToPrize(lastPopup.prize, lastPopup.mode);
+          showPopupOnce(lastPopup);
+          banner.current = { by: null, mode: null };
+          await loadWins(); await loadMe();
+          // keep globalSpinId until a new spin starts
         }
-      } catch {}
-      if (!stopped) setTimeout(tick, 600);
+      }catch{}
+      if (!stop) setTimeout(tick, 500);
     };
     tick();
-    return ()=>{ stopped = true; stopExternalSpin(); };
-  },[mode, spinning, entries.length]);
+    return ()=>{ stop=true; stopTicker(); };
+  },[mode, entries.length]);
 
-  /* ----- SSE: push updates when available ----- */
+  /* ---------- SSE (optional: just faster) ---------- */
   useEffect(()=>{
     const es = new EventSource("/api/spin/stream");
-
     es.addEventListener("SPIN_START", async (e:any)=>{
-      const data = JSON.parse(e.data);
-      viewLocked.current = true;
-      if (data?.mode && data.mode !== mode) { setMode(data.mode); await loadEntries(data.mode); }
-      setSomeoneSpinning({ by: data.by, mode: data.mode });
-      if (!spinning && !extTicker.current && wheelRef.current) {
-        extTicker.current = setInterval(()=>{
-          rot.current += 360;
-          wheelRef.current!.style.transition = `transform 0.7s linear`;
-          wheelRef.current!.style.transform = `rotate(${rot.current}deg)`;
-        }, 700);
+      const s = JSON.parse(e.data); // {spinId,by,mode}
+      if (!s?.spinId) return;
+      if (globalSpinId.current !== s.spinId){
+        globalSpinId.current = s.spinId;
+        banner.current = { by: s.by ?? null, mode: s.mode ?? null };
+        if (s.mode && s.mode !== mode) { setMode(s.mode); await loadEntries(s.mode); }
+        ensureTicker();
+      } else {
+        banner.current = { by: s.by ?? null, mode: s.mode ?? null };
       }
     });
-
     es.addEventListener("SPIN_RESULT", async (e:any)=>{
-      const data = JSON.parse(e.data);
-      const key = JSON.stringify(data?.popup || {});
-      if (key !== lastResultHandled.current) {
-        lastResultHandled.current = key;
-        stopExternalSpin();
-        await animatePrecisely(data?.popup?.prize, data?.popup?.mode);
-        showPopupOnce(data.popup);
-        loadWins(); loadMe();
-        viewLocked.current = false;
-        setSomeoneSpinning(null);
+      const d = JSON.parse(e.data); // {popup:{spinId,...}}
+      const p: Popup | undefined = d?.popup;
+      if (!p?.spinId) return;
+      if (p.spinId === globalSpinId.current){
+        stopTicker();
+        await animateToPrize(p.prize, p.mode);
+        showPopupOnce(p);
+        banner.current = { by: null, mode: null };
+        await loadWins(); await loadMe();
       }
     });
-
-    es.addEventListener("ping", ()=>{});
-    es.onerror = () => {}; // silent retries
-
+    es.addEventListener("ping",()=>{});
+    es.onerror = () => {};
     return ()=>{ es.close(); };
-  },[entries, mode, spinning]);
+  },[mode, entries.length]);
 
-  /* ----- LOCAL SPIN ----- */
+  /* ---------- Local spin ---------- */
   async function spin(){
-    if (spinning) return;
-    setSpinning(true);
-    viewLocked.current = true;
-
-    // Show the banner instantly for the spinner too
-    if (me?.name) setSomeoneSpinning({ by: me.name, mode });
-
-    const r = await fetch("/api/spin/start", {
-      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode})
-    });
-
-    if (!r.ok) {
-      const j = await r.json().catch(()=>({}));
+    // local protection; global lock enforced server-side
+    const r=await fetch("/api/spin/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode})});
+    if(!r.ok){
+      const j=await r.json().catch(()=>({}));
       alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
-      setSpinning(false); viewLocked.current = false; return;
+      return;
     }
-
-    const j = await r.json();
-
-    // precise aim for the spinner
-    if (wheelRef.current && entries.length) {
-      const count = Math.max(8, entries.length);
-      const name = String(j.result.name);
-      const idx = Math.max(0, entries.findIndex(e=>e.name===name || (j.result.type==="another" && e.kind==="another")));
-      const delta = deltaToCenter(idx === -1 ? 0 : idx, count, rot.current);
-      rot.current += delta;
-      wheelRef.current.style.transition = `transform ${j.spinMs/1000}s cubic-bezier(.2,.9,.2,1)`;
-      wheelRef.current.style.transform = `rotate(${rot.current}deg)`;
-    }
-
-    // fallback popup if SSE/polling is late
-    if (fallTimer.current) clearTimeout(fallTimer.current);
-    fallTimer.current = setTimeout(()=>{
-      const p: Popup = { user: me?.name ?? "Siz", prize: j.result.type==="another"?"Yana bir bor aylantirish":j.result.name, imageUrl: j.result.imageUrl, mode };
-      lastResultHandled.current = JSON.stringify(p);
-      showPopupOnce(p);
-      loadWins(); loadMe();
-      fallTimer.current = null;
-      viewLocked.current = false;
-      setSomeoneSpinning(null);
-    }, j.spinMs + 200);
-
-    setTimeout(()=>{ setSpinning(false); }, j.spinMs);
+    const j=await r.json(); // {spinId, result, spinMs}
+    // Spinner’s own wheel will animate precisely via polling/SSE result.
+    // (We avoid starting a separate animation here to keep everyone in perfect sync.)
   }
 
-  /* ----- Visuals ----- */
+  /* ---------- Visuals ---------- */
   const size=420, cx=size/2, cy=size/2, radius=size/2-6;
-  const count=Math.max(8, entries.length||8);
+  const count=Math.max(8, entries.length || 8);
   const sliceAngle=360/count;
   const colors=["#06b6d4","#f59e0b","#22c55e","#60a5fa","#f472b6","#a78bfa","#fb7185","#34d399"];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6 items-start">
+    <div className="grid grid-cols-1 lg:grid-cols-[auto_340px] gap-8 items-start">
       {/* LEFT */}
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex flex-col items-center gap-4 w-full">
         {/* Buttons */}
         <div className="flex gap-2">
           {[50,100,200].map(m=>(
             <button key={m}
-              disabled={viewLocked.current}
-              onClick={()=>!viewLocked.current && setMode(m as 50|100|200)}
-              className={`px-4 py-2 rounded font-medium ${mode===m?'bg-emerald-600 text-white':'bg-white/10 hover:bg-white/20'} ${viewLocked.current?'opacity-60 cursor-not-allowed':''}`}>
+              onClick={()=>setMode(m as 50|100|200)}
+              className={`px-4 py-2 rounded font-medium ${mode===m?'bg-emerald-600 text-white':'bg-white/10 hover:bg-white/20'}`}>
               {m}
             </button>
           ))}
         </div>
 
-        {/* EXACTLY HERE: who is spinning */}
-        {someoneSpinning && (
-          <div className="px-4 py-2 rounded-xl bg-amber-500/15 text-amber-300 text-base">
-            <b>{someoneSpinning.by}</b> aylantiryapti…
-          </div>
-        )}
+        {/* RESERVED BANNER SPACE (no layout jump) */}
+        <div className="h-8 flex items-center">
+          {banner.current.by ? (
+            <div className="px-4 py-1 rounded-md bg-amber-500/15 text-amber-300 text-sm">
+              <b>{banner.current.by}</b> aylantiryapti…
+            </div>
+          ) : null}
+        </div>
 
         {/* Wheel */}
         <div className="relative">
@@ -275,9 +226,8 @@ export default function WheelPage() {
         {/* Controls */}
         <div className="flex items-center gap-4">
           <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
-          <button disabled={spinning || viewLocked.current} onClick={spin}
-            className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold">
-            {spinning ? "Aylanyapti..." : `Spin (${mode})`}
+          <button onClick={spin} className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+            Aylantirish ({mode})
           </button>
         </div>
         <div className="text-xs text-neutral-400">
@@ -286,7 +236,7 @@ export default function WheelPage() {
       </div>
 
       {/* RIGHT: recent wins */}
-      <div className="w-full lg:w-[320px]">
+      <div className="w-full lg:w-[340px]">
         <div className="text-lg font-semibold mb-3">So‘nggi yutuqlar</div>
         <div className="space-y-3">
           {wins.map(w=>(
@@ -299,13 +249,13 @@ export default function WheelPage() {
         </div>
       </div>
 
-      {/* POPUP */}
+      {/* Global popup */}
       {popup && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center" onClick={()=>setPopup(null)}>
           <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
             {popup.imageUrl ? (<img src={popup.imageUrl} alt="" className="mx-auto w-40 h-40 object-cover rounded-xl"/>) : null}
             <div className="text-lg text-white"><b>{popup.user}</b> siz <b>{popup.prize}</b> yutib oldingiz.</div>
-            <button className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded text-sm text-neutral-300" onClick={()=>setPopup(null)}>Yopish</button>
+            <button className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded text-sm text-neutral-300">Yopish</button>
           </div>
         </div>
       )}
