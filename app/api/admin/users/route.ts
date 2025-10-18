@@ -16,6 +16,12 @@ export async function PUT(req: Request) {
   const me = await getSessionUser();
   if (!me || me.role !== "ADMIN") return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const body = await req.json(); // {id, name?, role?}
-  const u = await prisma.user.update({ where: { id: body.id }, data: { name: body.name, role: body.role } });
+  const u = await prisma.user.update({
+    where: { id: body.id },
+    data: {
+      ...(body.name ? { name: body.name } : {}),
+      ...(body.role ? { role: body.role } : {}),
+    }
+  });
   return NextResponse.json(u);
 }
