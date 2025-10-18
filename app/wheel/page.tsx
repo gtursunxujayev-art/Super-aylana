@@ -8,13 +8,12 @@ type Popup = { spinId: string; user: string; prize: string; imageUrl?: string | 
 type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item" | "another" };
 type Win = { id: string; user: string; prize: string; imageUrl?: string | null; time: string };
 
-/* ---------- Geometry helpers ---------- */
+/* ---------- Geometry ---------- */
 function deg2rad(d:number){return d*Math.PI/180;}
 function polar(cx:number,cy:number,r:number,aDeg:number){const a=deg2rad(aDeg);return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)};}
 function arcPath(cx:number,cy:number,r:number,start:number,end:number){const s=polar(cx,cy,r,start),e=polar(cx,cy,r,end);const large=end-start<=180?0:1;return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`; }
-function deltaToCenter(i:number,count:number,currentDeg:number){const slice=360/count;const center=i*slice+slice/2;const mod=(( -center - (currentDeg%360) )%360+360)%360;return 360*8+mod;}
+function deltaToCenter(i:number,count:number){const slice=360/count;const center=i*slice+slice/2;return 360*5 + (360 - center);} // 5 full rotations before stop
 
-/* ========== Component ========== */
 export default function WheelPage(){
   const [me,setMe]=useState<Me|null>(null);
   const [mode,setMode]=useState<50|100|200>(100);
@@ -23,17 +22,9 @@ export default function WheelPage(){
   const [popup,setPopup]=useState<Popup|null>(null);
 
   const wheelRef=useRef<HTMLDivElement>(null);
-  const rot=useRef(0);
-  const ticker=useRef<any>(null);
-
-  // global state mirrors Redis
-  const globalSpinId=useRef<string|null>(null);
-  const banner=useRef<{by:string|null,mode:number|null}>({by:null,mode:null});
-  const lastPopupKey=useRef<string>("");
-
-  // handshake guard to avoid early stop
-  const pendingSpin=useRef(false);
-  const pendingSince=useRef(0);
+  const [spinning,setSpinning]=useState(false);
+  const [banner,setBanner]=useState<{by:string|null}>({by:null});
+  const currentSpin=useRef<string|null>(null);
 
   async function loadMe(){const r=await fetch("/api/me",{cache:"no-store"}); if(r.ok) setMe(await r.json());}
   async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`,{cache:"no-store"}); if(r.ok) setEntries(await r.json());}
@@ -42,163 +33,108 @@ export default function WheelPage(){
   useEffect(()=>{ loadMe(); loadWins(); },[]);
   useEffect(()=>{ loadEntries(mode); },[mode]);
 
-  /** start/stop the continuous rotation (used while waiting for result) */
-  function ensureTicker(){
-    if (ticker.current || !wheelRef.current) return;
-    ticker.current = setInterval(()=>{
-      rot.current += 360;
-      wheelRef.current!.style.transition = `transform 0.7s linear`;
-      wheelRef.current!.style.transform  = `rotate(${rot.current}deg)`;
-    },700);
-  }
-  function stopTicker(){ if (ticker.current){ clearInterval(ticker.current); ticker.current=null; } }
-
-  /** snap all wheels to the exact winning slice */
-  async function animateToPrize(prizeName:string, prizeMode?:50|100|200){
-    if (prizeMode && prizeMode !== mode) { setMode(prizeMode); await loadEntries(prizeMode); }
-    if (!wheelRef.current || !entries.length) return;
-    const count=Math.max(8,entries.length);
-    const idx=Math.max(0,entries.findIndex(e=>e.name===prizeName || (prizeName.includes("Yana") && e.kind==="another")));
-    const delta=deltaToCenter(idx===-1?0:idx,count,rot.current);
-    rot.current+=delta;
-    wheelRef.current.style.transition=`transform 1.2s cubic-bezier(.2,.9,.2,1)`;
-    wheelRef.current.style.transform =`rotate(${rot.current}deg)`;
+  /** Animate spin easing to target */
+  function spinToPrize(prizeName:string){
+    if(!wheelRef.current||!entries.length)return;
+    const count=entries.length;
+    const idx=entries.findIndex(e=>e.name===prizeName||prizeName.includes(e.name));
+    const index=idx===-1?0:idx;
+    const deg=deltaToCenter(index,count);
+    wheelRef.current.style.transition="transform 8s cubic-bezier(0.33,1,0.68,1)";
+    wheelRef.current.style.transform=`rotate(${deg}deg)`;
   }
 
-  function showPopupOnce(p:Popup){
-    const key=JSON.stringify(p);
-    if (key!==lastPopupKey.current){ lastPopupKey.current=key; setPopup(p); }
+  /** reset rotation */
+  function resetWheel(){
+    if(!wheelRef.current)return;
+    wheelRef.current.style.transition="none";
+    wheelRef.current.style.transform="rotate(0deg)";
   }
 
-  /* ---------- Polling: single source of truth (no cache) ---------- */
+  /** Poll global state */
   useEffect(()=>{
     let stop=false;
-    const tick=async ()=>{
+    const tick=async()=>{
       try{
-        const r=await fetch("/api/spin/state",{cache:"no-store"});
-        if(!r.ok) return;
-        const data = await r.json();
-        // supports both shapes: { state, lastPopup } or legacy flat
-        const state = data?.state ?? { status: data?.status, spinId: data?.spinId, by: data?.by, mode: data?.mode };
-        const lastPopup = data?.lastPopup ?? data?.popup ?? null;
+        const res=await fetch("/api/spin/state",{cache:"no-store"});
+        if(!res.ok)return;
+        const d=await res.json();
+        const s=d.state??{};
+        const p=d.lastPopup??null;
 
-        // If we clicked recently, allow a small grace period where we DON'T stop ticker,
-        // even if state is still IDLE (server not yet updated).
-        if (pendingSpin.current && Date.now() - pendingSince.current > 4000) {
-          // after 4s with no SPINNING, cancel the pending visual
-          pendingSpin.current = false;
-          banner.current = { by: null, mode: null };
-          stopTicker();
-        }
-
-        if (state?.status==="SPINNING" && state.spinId){
-          // got global confirmation -> clear pending guard
-          pendingSpin.current = false;
-
-          if (globalSpinId.current !== state.spinId){
-            // NEW spin appeared globally
-            globalSpinId.current = state.spinId;
-            banner.current = { by: state.by ?? null, mode: state.mode ?? null };
-            if (state.mode && state.mode !== mode) { setMode(state.mode); await loadEntries(state.mode); }
-            ensureTicker();  // make sure we're rotating
-          } else {
-            // keep banner fresh
-            banner.current = { by: state.by ?? null, mode: state.mode ?? null };
-          }
-        } else {
-          // IDLE path: only stop ticker if we are NOT waiting for server confirm
-          if (!pendingSpin.current && !lastPopup) {
-            banner.current = { by: null, mode: null };
-            stopTicker();
+        if(s.status==="SPINNING"){
+          setBanner({by:s.by??null});
+          if(currentSpin.current!==s.spinId){
+            currentSpin.current=s.spinId;
+            setSpinning(true);
+            resetWheel(); // prepare
           }
         }
-
-        // result arrives globally?
-        if (lastPopup?.spinId && lastPopup.spinId === globalSpinId.current){
-          pendingSpin.current = false;
-          stopTicker();
-          await animateToPrize(lastPopup.prize, lastPopup.mode);
-          showPopupOnce(lastPopup);
-          banner.current = { by: null, mode: null };
-          await loadWins(); await loadMe();
-          // keep globalSpinId until a new spin starts; harmless
+        if(p?.spinId && p.spinId===currentSpin.current){
+          setSpinning(false);
+          setBanner({by:null});
+          spinToPrize(p.prize);
+          setTimeout(()=>setPopup(p),8200); // show popup after spin completes
+          loadMe(); loadWins();
+          currentSpin.current=null;
         }
       }catch{}
-      if (!stop) setTimeout(tick, 450);
+      if(!stop)setTimeout(tick,700);
     };
     tick();
-    return ()=>{ stop=true; stopTicker(); };
-  },[mode, entries.length]);
+    return()=>{stop=true;};
+  },[]);
 
-  /* ---------- SSE (fast path; polling still covers everything) ---------- */
+  /** SSE (instant reaction) */
   useEffect(()=>{
-    const es = new EventSource("/api/spin/stream");
-    es.addEventListener("SPIN_START", async (e:any)=>{
-      const s = JSON.parse(e.data); // {spinId,by,mode}
-      if (!s?.spinId) return;
-      // on SSE start we know server has confirmed -> clear pending
-      pendingSpin.current = false;
-
-      if (globalSpinId.current !== s.spinId){
-        globalSpinId.current = s.spinId;
-        banner.current = { by: s.by ?? null, mode: s.mode ?? null };
-        if (s.mode && s.mode !== mode) { setMode(s.mode); await loadEntries(s.mode); }
-        ensureTicker();
-      } else {
-        banner.current = { by: s.by ?? null, mode: s.mode ?? null };
+    const es=new EventSource("/api/spin/stream");
+    es.addEventListener("SPIN_START",(e:any)=>{
+      const s=JSON.parse(e.data);
+      if(!s.spinId)return;
+      setBanner({by:s.by??null});
+      if(currentSpin.current!==s.spinId){
+        currentSpin.current=s.spinId;
+        setSpinning(true);
+        resetWheel();
       }
     });
-    es.addEventListener("SPIN_RESULT", async (e:any)=>{
-      const d = JSON.parse(e.data); // {popup:{spinId,...}}
-      const p: Popup | undefined = d?.popup;
-      if (!p?.spinId) return;
-      if (p.spinId === globalSpinId.current){
-        pendingSpin.current = false;
-        stopTicker();
-        await animateToPrize(p.prize, p.mode);
-        showPopupOnce(p);
-        banner.current = { by: null, mode: null };
-        await loadWins(); await loadMe();
+    es.addEventListener("SPIN_RESULT",(e:any)=>{
+      const d=JSON.parse(e.data);
+      const p:Popup|undefined=d?.popup;
+      if(!p)return;
+      if(p.spinId===currentSpin.current){
+        setSpinning(false);
+        setBanner({by:null});
+        spinToPrize(p.prize);
+        setTimeout(()=>setPopup(p),8200);
+        loadMe(); loadWins();
+        currentSpin.current=null;
       }
     });
-    es.addEventListener("ping",()=>{});
-    es.onerror = () => {};
-    return ()=>{ es.close(); };
-  },[mode, entries.length]);
+    return()=>es.close();
+  },[]);
 
-  /* ---------- LOCAL SPIN: start ticker immediately & set pending guard ---------- */
+  /** Local start */
   async function spin(){
-    // visual start
-    ensureTicker();
-    // show your name in the reserved banner space immediately
-    if (me?.name) banner.current = { by: me.name, mode };
-
-    // handshake guard
-    pendingSpin.current = true;
-    pendingSince.current = Date.now();
-
+    if(spinning)return;
+    setBanner({by:me?.name??null});
+    resetWheel();
+    setSpinning(true);
     const r=await fetch("/api/spin/start",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({mode})
     });
-
     if(!r.ok){
-      // server refused: cancel visuals
-      pendingSpin.current = false;
-      banner.current = { by: null, mode: null };
-      stopTicker();
+      setSpinning(false);
       const j=await r.json().catch(()=>({}));
-      alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
-      return;
+      alert(j?.error==="BUSY"?"Hozir aylanmoqda.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
     }
-
-    // do not snap locally; we’ll stop & snap when global popup arrives (keeps tabs in sync)
   }
 
   /* ---------- Visuals ---------- */
   const size=420, cx=size/2, cy=size/2, radius=size/2-6;
-  const count=Math.max(8, entries.length || 8);
+  const count=Math.max(8,entries.length||8);
   const sliceAngle=360/count;
   const colors=["#06b6d4","#f59e0b","#22c55e","#60a5fa","#f472b6","#a78bfa","#fb7185","#34d399"];
 
@@ -206,7 +142,6 @@ export default function WheelPage(){
     <div className="grid grid-cols-1 lg:grid-cols-[auto_340px] gap-8 items-start">
       {/* LEFT */}
       <div className="flex flex-col items-center gap-4 w-full">
-        {/* Buttons */}
         <div className="flex gap-2">
           {[50,100,200].map(m=>(
             <button key={m}
@@ -217,20 +152,20 @@ export default function WheelPage(){
           ))}
         </div>
 
-        {/* FIXED BANNER SPACE (no layout jump) */}
+        {/* Banner */}
         <div className="h-8 flex items-center">
-          {banner.current.by ? (
+          {banner.by && (
             <div className="px-4 py-1 rounded-md bg-amber-500/15 text-amber-300 text-sm">
-              <b>{banner.current.by}</b> aylantiryapti…
+              <b>{banner.by}</b> aylantiryapti…
             </div>
-          ) : null}
+          )}
         </div>
 
         {/* Wheel */}
         <div className="relative">
           <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[14px] border-r-[14px] border-b-[28px] border-l-transparent border-r-transparent border-b-yellow-400 drop-shadow" />
           <div className="relative w-[460px] h-[460px] rounded-full bg-neutral-900 border-4 border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.5)] overflow-hidden">
-            <div ref={wheelRef} className="absolute inset-0 will-change-transform">
+            <div ref={wheelRef} className="absolute inset-0" style={{transform:"rotate(0deg)"}}>
               <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%">
                 <defs>
                   <radialGradient id="shine" cx="50%" cy="50%" r="60%">
@@ -251,7 +186,7 @@ export default function WheelPage(){
                       <path d={path} fill={fill} stroke="#0a0a0a" strokeWidth={2}/>
                       <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle" fontSize={12}
                         className="fill-white" transform={`rotate(${mid+90}, ${p.x}, ${p.y})`} style={{userSelect:"none"}}>
-                        {label ? label.name : "Prize"}
+                        {label?label.name:"Prize"}
                       </text>
                     </g>
                   );
@@ -270,8 +205,8 @@ export default function WheelPage(){
         {/* Controls */}
         <div className="flex items-center gap-4">
           <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
-          <button onClick={spin} className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
-            Aylantirish ({mode})
+          <button onClick={spin} disabled={spinning} className={`px-6 py-3 rounded-xl font-semibold text-white ${spinning?'bg-gray-600':'bg-emerald-600 hover:bg-emerald-700'}`}>
+            {spinning?'Aylanmoqda...':`Aylantirish (${mode})`}
           </button>
         </div>
         <div className="text-xs text-neutral-400">
@@ -279,7 +214,7 @@ export default function WheelPage(){
         </div>
       </div>
 
-      {/* RIGHT: recent wins */}
+      {/* RIGHT */}
       <div className="w-full lg:w-[340px]">
         <div className="text-lg font-semibold mb-3">So‘nggi yutuqlar</div>
         <div className="space-y-3">
@@ -293,12 +228,12 @@ export default function WheelPage(){
         </div>
       </div>
 
-      {/* Global popup */}
+      {/* POPUP */}
       {popup && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center" onClick={()=>setPopup(null)}>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={()=>setPopup(null)}>
           <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
-            {popup.imageUrl ? (<img src={popup.imageUrl} alt="" className="mx-auto w-40 h-40 object-cover rounded-xl"/>) : null}
-            <div className="text-lg text-white"><b>{popup.user}</b> siz <b>{popup.prize}</b> yutib oldingiz.</div>
+            {popup.imageUrl && <img src={popup.imageUrl} alt="" className="mx-auto w-40 h-40 object-cover rounded-xl"/>}
+            <div className="text-lg text-white"><b>{popup.user}</b> siz <b>{popup.prize}</b> yutib oldingiz!</div>
             <button className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded text-sm text-neutral-300">Yopish</button>
           </div>
         </div>
