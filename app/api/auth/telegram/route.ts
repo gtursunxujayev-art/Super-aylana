@@ -6,18 +6,10 @@ import { prisma } from "@/app/lib/prisma";
 import { setSession } from "@/app/lib/auth";
 
 /**
- * Minimal Telegram auth endpoint.
- *
- * Accepts either GET (query) or POST (JSON) with any of:
- * - tgid?: string   // Telegram user id
- * - login?: string  // fallback login if you use it
- * - name?: string   // display name / username
- *
- * It finds or creates the user, calls setSession({ login?, tgid?, name? }),
- * and returns { ok, user } or redirects to /wheel on GET.
- *
- * NOTE: This is a minimal version without Telegram signature verification.
- * If you want full verification of initData, we can add it later.
+ * Minimal Telegram auth endpoint (without signature verification).
+ * Accepts GET or POST with: tgid?, login?, name?
+ * - If tgid present → use it; login defaults to tgid
+ * - If tgid missing but login present → set tgid = login (required by your schema)
  */
 
 type Input = {
@@ -27,15 +19,13 @@ type Input = {
 };
 
 async function upsertFrom(input: Input) {
-  const tgid = input.tgid?.trim() || null;
-  const login = input.login?.trim() || (tgid ? tgid : null);
-  const name = input.name?.trim() || (tgid ? `user_${tgid}` : "Guest");
+  const tgid = (input.tgid || "").trim();
+  const loginIn = (input.login || "").trim();
+  const name = (input.name || "").trim() || (tgid ? `user_${tgid}` : loginIn ? `user_${loginIn}` : "Guest");
 
-  if (!tgid && !login) {
-    throw new Error("missing_login_or_tgid");
-  }
+  if (!tgid && !loginIn) throw new Error("missing_login_or_tgid");
 
-  // Try by TGID first
+  // prefer TGID if present
   if (tgid) {
     const byTg = await prisma.user.findUnique({
       where: { tgid },
@@ -43,11 +33,10 @@ async function upsertFrom(input: Input) {
     });
     if (byTg) return byTg;
 
-    // Else create with login=tgid (per your spec)
     const created = await prisma.user.create({
       data: {
         tgid,
-        login: login ?? tgid,
+        login: loginIn || tgid,    // ensure login exists
         name,
         password: Math.random().toString(36).slice(2, 12),
         balance: 0,
@@ -57,17 +46,18 @@ async function upsertFrom(input: Input) {
     return created;
   }
 
-  // No tgid, use login
+  // No TGID but we have login → mirror TGID = login
+  const login = loginIn;
   const byLogin = await prisma.user.findUnique({
-    where: { login: login! },
+    where: { login },
     select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
   });
   if (byLogin) return byLogin;
 
   const created = await prisma.user.create({
     data: {
-      tgid: null,
-      login: login!,
+      tgid: login,               // <-- REQUIRED: mirror login into tgid
+      login,
       name,
       password: Math.random().toString(36).slice(2, 12),
       balance: 0,
@@ -87,7 +77,6 @@ export async function GET(req: Request) {
 
   try {
     const user = await upsertFrom(input);
-    // IMPORTANT: setSession expects an object, not a string
     await setSession({ tgid: user.tgid, login: user.login, name: user.name });
     return NextResponse.redirect(new URL("/wheel", url), 302);
   } catch (e: any) {
@@ -101,11 +90,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  let body: Input = {};
   try {
-    body = (await req.json().catch(() => ({}))) as Input;
+    const body = (await req.json().catch(() => ({}))) as Input;
     const user = await upsertFrom(body);
-    // IMPORTANT: setSession expects an object, not a string
     await setSession({ tgid: user.tgid, login: user.login, name: user.name });
     return NextResponse.json(
       { ok: true, user: { id: user.id, name: user.name, role: user.role } },
