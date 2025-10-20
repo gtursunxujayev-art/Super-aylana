@@ -1,93 +1,260 @@
 // app/lib/auth.ts
-import { cookies } from "next/headers";
+// Unified auth helpers used by API routes (admin, items, store, auth flows, etc.)
+// IMPORTANT: Any route calling these functions must run on Node runtime (not Edge).
+
+import { cookies, headers } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
 import { randomBytes } from "crypto";
 
-export type AuthUser = {
+export type SessionUser = {
   id: string;
   login: string;
   name: string;
   tgid: string | null;
   balance: number;
-  role: string;
+  role: "USER" | "ADMIN";
 };
 
-function randomStr(len = 10) {
-  return randomBytes(len).toString("hex").slice(0, len);
+function rand(n = 10) {
+  return randomBytes(n).toString("hex").slice(0, n);
+}
+
+/** Low-level cookie setters used by all helpers */
+function setCookie(key: string, value: string) {
+  cookies().set(key, value, {
+    httpOnly: false,
+    sameSite: "lax",
+    path: "/",
+  });
+}
+function delCookie(key: string) {
+  cookies().set(key, "", { path: "/", maxAge: 0 });
+}
+
+/** Try to read login / tgid from cookies, headers, or query */
+function extractIds(req?: Request) {
+  const c = cookies();
+  const h = headers();
+  const url = req ? new URL(req.url) : null;
+
+  const login =
+    c.get("login")?.value ||
+    h.get("x-login") ||
+    (url ? url.searchParams.get("login") : "") ||
+    "";
+
+  const tgid =
+    c.get("tgid")?.value ||
+    h.get("x-telegram-id") ||
+    h.get("x-tgid") ||
+    (url ? url.searchParams.get("tgid") : "") ||
+    "";
+
+  return {
+    login: login?.trim() || null,
+    tgid: tgid?.trim() || null,
+  };
 }
 
 /**
- * Finds the current user by cookies (login/tgid).
- * If missing, will create a user:
- *  - If a TG id is available in cookies or query/header, use that
- *  - Otherwise creates a "guest-xxxx" user
- * Also (re)sets the cookies so subsequent calls work.
+ * getSessionUser:
+ * Returns the existing user from DB based on cookies/headers/query.
+ * Does NOT create users. Returns null if not found.
  */
-export async function ensureUser(req: Request): Promise<AuthUser> {
-  const c = cookies();
+export async function getSessionUser(req?: Request): Promise<SessionUser | null> {
+  const { login, tgid } = extractIds(req);
 
-  // Try to read TGID or login from cookies first
-  let tgid = c.get("tgid")?.value || null;
-  let login = c.get("login")?.value || null;
-
-  // Also allow passing TGID through header or query (for Telegram WebApp)
-  const url = new URL(req.url);
-  const headerTgid = (req.headers.get("x-telegram-id") || req.headers.get("x-tgid") || "").trim();
-  const qTgid = (url.searchParams.get("tgid") || "").trim();
-  if (!tgid && (headerTgid || qTgid)) {
-    tgid = headerTgid || qTgid;
-  }
-
-  // If we have login, try by login first
   if (login) {
     const u = await prisma.user.findUnique({
       where: { login },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
-    if (u) return u;
+    if (u) return u as SessionUser;
   }
 
-  // If we have tgid, try by tgid
+  if (tgid) {
+    const u = await prisma.user.findUnique({
+      where: { tgid },
+      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+    });
+    if (u) {
+      // keep cookies in sync
+      setCookie("tgid", u.tgid || "");
+      setCookie("login", u.login);
+      return u as SessionUser;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * ensureUser:
+ * Same as getSessionUser, but WILL create a user if none is found.
+ * - If TGID exists → create login = tgid, name = user_<tgid>
+ * - Otherwise create a guest user login = "guest-xxxx"
+ * Also sets/refreshes cookies.
+ */
+export async function ensureUser(req: Request): Promise<SessionUser> {
+  const { login, tgid } = extractIds(req);
+
+  // 1) login cookie → fetch
+  if (login) {
+    const byLogin = await prisma.user.findUnique({
+      where: { login },
+      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+    });
+    if (byLogin) {
+      // refresh TG cookie if necessary
+      if (byLogin.tgid) setCookie("tgid", byLogin.tgid);
+      setCookie("login", byLogin.login);
+      return byLogin as SessionUser;
+    }
+  }
+
+  // 2) tgid → fetch or create
   if (tgid) {
     const byTg = await prisma.user.findUnique({
       where: { tgid },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
     if (byTg) {
-      // refresh cookies
-      c.set("tgid", byTg.tgid || "", { path: "/", httpOnly: false });
-      c.set("login", byTg.login, { path: "/", httpOnly: false });
-      return byTg;
+      setCookie("tgid", byTg.tgid || "");
+      setCookie("login", byTg.login);
+      return byTg as SessionUser;
     }
 
-    // No user with this TG – create one
-    const newUser = await prisma.user.create({
+    // create new TG user
+    const created = await prisma.user.create({
       data: {
         tgid,
-        login: tgid,                 // your spec: auto-register login = tgid
-        name: `user_${tgid}`,        // or use Telegram username if you have it
-        password: randomStr(16),     // random password (not used)
-        balance: 0,                  // or seed with initial coins if you want
+        login: tgid,             // spec: auto-register login = tgid
+        name: `user_${tgid}`,
+        password: rand(16),
+        balance: 0,
       },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
-    c.set("tgid", newUser.tgid || "", { path: "/", httpOnly: false });
-    c.set("login", newUser.login, { path: "/", httpOnly: false });
-    return newUser;
+    setCookie("tgid", created.tgid || "");
+    setCookie("login", created.login);
+    return created as SessionUser;
   }
 
-  // No cookies and no TG → create a guest user
-  const guestLogin = `guest-${randomStr(8)}`;
+  // 3) fallback → create guest
+  const guestLogin = `guest-${rand(8)}`;
   const guest = await prisma.user.create({
     data: {
       tgid: null,
       login: guestLogin,
       name: "Guest",
-      password: randomStr(16),
-      balance: 0, // or initial 100 if you prefer
+      password: rand(16),
+      balance: 0,
     },
     select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
   });
-  c.set("login", guest.login, { path: "/", httpOnly: false });
-  return guest;
+  setCookie("login", guest.login);
+  return guest as SessionUser;
+}
+
+/**
+ * requireUser:
+ * Ensure a user exists. If adminOnly=true, verify ADMIN role.
+ * Throws an Error if forbidden; catch in your route and return 401/403.
+ */
+export async function requireUser(
+  req?: Request,
+  opts?: { adminOnly?: boolean }
+): Promise<SessionUser> {
+  const user = (await getSessionUser(req)) as SessionUser | null;
+  if (!user) throw new Error("UNAUTHENTICATED");
+  if (opts?.adminOnly && user.role !== "ADMIN") throw new Error("FORBIDDEN");
+  return user;
+}
+
+/**
+ * setSession:
+ * Utility for auth routes to establish a session explicitly.
+ * It will upsert a user by login or tgid, then set cookies.
+ *
+ * Example payloads:
+ *   setSession({ login: '9999', name: 'Alice' })
+ *   setSession({ tgid: '123456', name: '@alice' })
+ */
+export async function setSession(payload: {
+  login?: string | null;
+  tgid?: string | null;
+  name?: string | null;
+}): Promise<SessionUser> {
+  const login = payload.login?.trim() || null;
+  const tgid = payload.tgid?.trim() || null;
+  const name = (payload.name?.trim() || null) ?? null;
+
+  let user: SessionUser | null = null;
+
+  if (login) {
+    const found = await prisma.user.findUnique({
+      where: { login },
+      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+    });
+    if (found) {
+      user = found as SessionUser;
+    } else {
+      const created = await prisma.user.create({
+        data: {
+          login,
+          tgid,
+          name: name || (tgid ? `user_${tgid}` : "Guest"),
+          password: rand(16),
+          balance: 0,
+        },
+        select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+      });
+      user = created as SessionUser;
+    }
+  } else if (tgid) {
+    const byTg = await prisma.user.findUnique({
+      where: { tgid },
+      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+    });
+    if (byTg) {
+      user = byTg as SessionUser;
+    } else {
+      const created = await prisma.user.create({
+        data: {
+          tgid,
+          login: tgid, // spec
+          name: name || `user_${tgid}`,
+          password: rand(16),
+          balance: 0,
+        },
+        select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+      });
+      user = created as SessionUser;
+    }
+  } else {
+    // no identifiers → create guest
+    const created = await prisma.user.create({
+      data: {
+        tgid: null,
+        login: `guest-${rand(8)}`,
+        name: name || "Guest",
+        password: rand(16),
+        balance: 0,
+      },
+      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+    });
+    user = created as SessionUser;
+  }
+
+  // Set cookies for subsequent requests
+  if (user.tgid) setCookie("tgid", user.tgid);
+  setCookie("login", user.login);
+
+  return user;
+}
+
+/** Optional: clear session (not required by your imports but handy) */
+export async function clearSession() {
+  delCookie("login");
+  delCookie("tgid");
 }
