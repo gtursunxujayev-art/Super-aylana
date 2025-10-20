@@ -209,7 +209,7 @@ export default function WheelPage(){
       setBanner(null);
       resetWheelTo(0);
       const j = await r.json().catch(()=>({}));
-      alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.":"Xatolik.");
+      alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.": (j?.error || "Xatolik."));
       return;
     }
   }
@@ -221,7 +221,7 @@ export default function WheelPage(){
   const colors=["#06b6d4","#f59e0b","#22c55e","#60a5fa","#f472b6","#a78bfa","#fb7185","#34d399"];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[260px_auto_340px] gap-8 items-start">
+    <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_300px] gap-6 items-start">
       <style jsx>{`
         @keyframes spinLinear {
           from { transform: rotate(0deg); }
@@ -232,7 +232,7 @@ export default function WheelPage(){
       {/* LEFT: Users */}
       <div className="w-full">
         <div className="text-lg font-semibold mb-3">Foydalanuvchilar</div>
-        <div className="space-y-2 max-h-[520px] overflow-auto pr-2">
+        <div className="space-y-2 max-h-[480px] overflow-auto pr-1">
           {users.map(u=>(
             <div key={u.id} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
               <div className="truncate">
