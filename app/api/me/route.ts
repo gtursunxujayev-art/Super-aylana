@@ -1,18 +1,35 @@
+// app/api/me/route.ts
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/app/lib/auth";
+import { cookies } from "next/headers";
+import { prisma } from "@/app/lib/prisma";
 
 export async function GET() {
-  const me = await getSessionUser();
-  if (!me) return NextResponse.json({ error: "unauth" }, { status: 401 });
-  return NextResponse.json({
-    id: me.id,
-    name: me.name,
-    login: me.login,
-    tgid: me.tgid,
-    balance: me.balance,
-    role: me.role,
-  });
+  try {
+    // Adjust this to your real auth (JWT, tgid, etc.)
+    const c = cookies();
+    const login = c.get("login")?.value; // e.g., you set this on login/register
+    if (!login) return NextResponse.json(null, { status: 200 });
+
+    const user = await prisma.user.findUnique({
+      where: { login },
+      select: {
+        id: true,
+        name: true,
+        login: true,
+        tgid: true,
+        role: true,
+        balance: true,
+      },
+    });
+
+    return NextResponse.json(user ?? null, {
+      status: 200,
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (e) {
+    console.error("[/api/me] failed:", e);
+    return NextResponse.json(null, { status: 200 });
+  }
 }
