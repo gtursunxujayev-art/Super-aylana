@@ -1,353 +1,184 @@
-'use client';
+// app/wheel/page.tsx
+"use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ---------- Types ---------- */
-type Me = { id: string; name: string; balance: number; role: string; login?: string };
-type Popup = { spinId: string; user: string; prize: string; imageUrl?: string | null; mode?: 50|100|200 };
-type Entry = { id: string | null; name: string; imageUrl?: string | null; weight: number; kind: "item" | "another" };
-type Win = { id: string; user: string; prize: string; imageUrl?: string | null; time: string };
-type UserRow = { id:string; name:string|null; login:string; balance:number };
+type Item = {
+  id: string;
+  name: string;
+  price: number;
+};
 
-/* ---------- Geometry helpers ---------- */
-function deg2rad(d:number){return d*Math.PI/180;}
-function polar(cx:number,cy:number,r:number,aDeg:number){const a=deg2rad(aDeg);return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)};}
-function arcPath(cx:number,cy:number,r:number,start:number,end:number){const s=polar(cx,cy,r,start),e=polar(cx,cy,r,end);const large=end-start<=180?0:1;return `M ${cx} ${cy} L ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y} Z`; }
-function readCurrentDeg(el: HTMLElement){
-  const tr = getComputedStyle(el).transform;
-  if (!tr || tr === "none") return 0;
-  const m = tr.match(/^matrix\(([^)]+)\)$/);
-  if (!m) return 0;
-  const [aStr,bStr] = m[1].split(",").map(s=>s.trim());
-  const a = parseFloat(aStr), b = parseFloat(bStr);
-  const angle = Math.atan2(b, a) * 180 / Math.PI;
-  return (angle + 360) % 360;
-}
-function deltaToCenterFrom(currentDeg:number, sliceIndex:number, total:number){
-  const slice = 360/total;
-  const center = sliceIndex*slice + slice/2;
-  const mod = ((-center - currentDeg) % 360 + 360) % 360;
-  return 720 + mod; // 2 turns + align
-}
+type WinFeed = { who: string; prize: string; at: string };
 
-/* ========== Component ========== */
-export default function WheelPage(){
-  /* Data */
-  const [me,setMe]=useState<Me|null>(null);
-  const [mode,setMode]=useState<50|100|200>(100);
-  const [entries,setEntries]=useState<Entry[]>([]);
-  const [wins,setWins]=useState<Win[]>([]);
-  const [users,setUsers]=useState<UserRow[]>([]);
-  const [popup,setPopup]=useState<Popup|null>(null);
+export default function WheelPage() {
+  const [mode, setMode] = useState<50 | 100 | 200>(100);
+  const [balance, setBalance] = useState<number>(0);
+  const [spinning, setSpinning] = useState(false);
+  const [feed, setFeed] = useState<WinFeed[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
 
-  /* UI/Global */
-  const [spinning,setSpinning]=useState(false);
-  const [banner,setBanner]=useState<string|null>(null);
-  const currentSpinId=useRef<string|null>(null);
-  const startedAt=useRef<number|null>(null);
-  const resultRef=useRef<Popup|null>(null);
-  const finishedRef=useRef(false);
-  const entriesAtSpinRef=useRef<Entry[]>([]);
+  const circleRef = useRef<HTMLDivElement>(null);
 
-  /* DOM */
-  const wheelRef=useRef<HTMLDivElement>(null);
-
-  /* Loaders */
-  async function loadMe(){const r=await fetch("/api/me",{cache:"no-store"}); if(r.ok) setMe(await r.json());}
-  async function loadEntries(m:50|100|200){const r=await fetch(`/api/wheel?mode=${m}`,{cache:"no-store"}); if(r.ok) setEntries(await r.json());}
-  async function loadWins(){const r=await fetch("/api/recent-wins",{cache:"no-store"}); if(r.ok) setWins(await r.json());}
-  async function loadUsers(){const r=await fetch("/api/users/list",{cache:"no-store"}); if(r.ok) setUsers(await r.json());}
-
-  useEffect(()=>{ loadMe(); loadWins(); loadUsers(); },[]);
-  useEffect(()=>{ loadEntries(mode); },[mode]);
-  useEffect(()=>{ const t=setInterval(loadUsers,10000); return ()=>clearInterval(t); },[]);
-
-  /* Wheel visuals */
-  function forceReflow(el:HTMLElement){ void el.offsetHeight; }
-  function resetWheelTo(deg:number){
-    const el=wheelRef.current; if(!el) return;
-    el.style.animation="none";
-    el.style.transition="none";
-    el.style.transform=`rotate(${deg}deg)`;
-    forceReflow(el);
-  }
-  function startWaitingSpin(){
-    const el=wheelRef.current; if(!el) return;
-    el.style.transition="none";
-    el.style.animation="spinLinear 900ms linear infinite";
-  }
-  function finishToPrize(p: Popup, totalMsTarget=10000){
-    const el=wheelRef.current; if(!el) return;
-    if (finishedRef.current) return;
-    finishedRef.current = true;
-
-    const current = readCurrentDeg(el);
-    resetWheelTo(current);
-
-    const now = Date.now();
-    const elapsed = startedAt.current ? Math.max(0, now - startedAt.current) : 0;
-    const remaining = Math.max(1200, Math.min(4500, totalMsTarget - elapsed)); // 1.2–4.5s
-
-    const list = entriesAtSpinRef.current.length ? entriesAtSpinRef.current : entries;
-    const total = Math.max(8, list.length || 8);
-    let idx = list.findIndex(e => e.name === p.prize || (p.prize.includes("Yana") && e.kind==="another"));
-    if (idx < 0) idx = 0;
-
-    let delta = deltaToCenterFrom(current, idx, total);
-    if (delta < 1) delta += 360;
-    const finalDeg = current + delta;
-
-    el.style.transition = `transform ${remaining}ms cubic-bezier(.12,.9,.18,1)`;
-    el.style.transform  = `rotate(${finalDeg}deg)`;
-
-    const finalize = ()=>{
-      el.removeEventListener('transitionend', onEnd);
-      const normalized = ((finalDeg % 360) + 360) % 360;
-      resetWheelTo(normalized);
-      setSpinning(false);
-      setBanner(null);
-      setPopup(resultRef.current);
-      resultRef.current = null;
+  // Fetch me
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const res = await fetch("/api/me", { cache: "no-store" });
+        const data = await res.json();
+        if (data?.balance != null) setBalance(data.balance);
+      } catch {}
     };
-    const onEnd = ()=> finalize();
-    el.addEventListener('transitionend', onEnd, { once: true });
-    setTimeout(finalize, remaining + 80);
-  }
+    run();
+  }, []);
 
-  /* Polling (authoritative) */
-  useEffect(()=>{
-    let stop=false;
-    const tick=async ()=>{
-      try{
-        const r=await fetch("/api/spin/state",{cache:"no-store"});
-        if(!r.ok) return;
-        const data=await r.json();
-        const state = data?.state ?? { status: data?.status, spinId: data?.spinId, by: data?.by, mode: data?.mode, startedAt: data?.startedAt };
-        const lastPopup: Popup | null = data?.lastPopup ?? null;
-
-        if (state?.status === "SPINNING" && state.spinId){
-          setSpinning(true);
-          setBanner(state.by ?? null);
-          startedAt.current = state.startedAt ?? Date.now();
-
-          if (currentSpinId.current !== state.spinId){
-            currentSpinId.current = state.spinId;
-            finishedRef.current = false;
-            entriesAtSpinRef.current = entries.slice();
-            resetWheelTo(0);
-            startWaitingSpin();
-            if (state.mode && state.mode !== mode) setMode(state.mode);
-          }
-        }
-
-        if (lastPopup?.spinId && lastPopup.spinId === currentSpinId.current){
-          resultRef.current = lastPopup;
-          finishToPrize(lastPopup, 10000);
-          await loadWins(); await loadMe();
-          currentSpinId.current = null;
-        }
-      }catch{}
-      if(!stop) setTimeout(tick, 450);
-    };
-    tick();
-    return ()=>{ stop=true; };
-  },[entries, mode]);
-
-  /* SSE (fast path) */
-  useEffect(()=>{
-    const es = new EventSource("/api/spin/stream");
-    es.addEventListener("SPIN_START", (e:any)=>{
-      const s = JSON.parse(e.data);
-      if(!s?.spinId) return;
+  // Subscribe to server-sent events (start/result)
+  useEffect(() => {
+    const ev = new EventSource("/api/spin/state");
+    ev.addEventListener("SPIN_START", () => {
       setSpinning(true);
-      setBanner(s.by ?? null);
-      startedAt.current = s.startedAt ?? Date.now();
-
-      if (currentSpinId.current !== s.spinId){
-        currentSpinId.current = s.spinId;
-        finishedRef.current = false;
-        entriesAtSpinRef.current = entries.slice();
-        resetWheelTo(0);
-        startWaitingSpin();
-        if (s.mode && s.mode !== mode) setMode(s.mode);
-      }
+      setMessage(null);
     });
-    es.addEventListener("SPIN_RESULT", (e:any)=>{
-      const d = JSON.parse(e.data);
-      const p: Popup | undefined = d?.popup;
-      if (!p?.spinId) return;
-      if (p.spinId === currentSpinId.current){
-        resultRef.current = p;
-        finishToPrize(p, 10000);
-        loadWins(); loadMe();
-        currentSpinId.current = null;
-      }
-    });
-    es.addEventListener("ping", ()=>{});
-    es.onerror = () => {};
-    return ()=> es.close();
-  },[entries, mode]);
-
-  /* Local click */
-  async function spin(){
-    if (spinning) return;
-    setSpinning(true);
-    setBanner(me?.name ?? null);
-    startedAt.current = Date.now();
-    finishedRef.current = false;
-    entriesAtSpinRef.current = entries.slice();
-    resetWheelTo(0);
-    startWaitingSpin();
-
-    const r = await fetch("/api/spin/start",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({mode})
-    });
-    if (!r.ok){
+    ev.addEventListener("SPIN_RESULT", (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        // Update balance if server sends it (optional)
+        if (typeof payload.newBalance === "number") {
+          setBalance(payload.newBalance);
+        }
+        // Add to feed
+        setFeed((f) => [
+          { who: payload.by, prize: payload.label, at: new Date().toLocaleTimeString() },
+          ...f.slice(0, 9),
+        ]);
+      } catch {}
       setSpinning(false);
-      setBanner(null);
-      resetWheelTo(0);
-      const j = await r.json().catch(()=>({}));
-      alert(j?.error==="BUSY"?"Hozir aylanmoqda, kuting.":j?.error==="NOT_ENOUGH_COINS"?"Koin yetarli emas.": (j?.error || "Xatolik."));
-      return;
+    });
+    ev.onerror = () => {
+      // keep the UI resilient
+    };
+    return () => ev.close();
+  }, []);
+
+  // Fake wheel transform (your existing drawing/animation)
+  useEffect(() => {
+    if (!circleRef.current) return;
+    circleRef.current.style.transition = spinning ? "transform 10s cubic-bezier(0.12, 0.01, 0, 1)" : "none";
+    if (spinning) {
+      // spin to a large angle; the server will publish the final result angle too if you implemented it
+      const finalAngle = 360 * 10 + Math.floor(Math.random() * 360);
+      circleRef.current.style.transform = `rotate(${finalAngle}deg)`;
+    } else {
+      circleRef.current.style.transform = `rotate(0deg)`;
+    }
+  }, [spinning]);
+
+  async function startSpin() {
+    if (spinning) return;
+
+    try {
+      setMessage(null);
+      setSpinning(true);
+
+      const res = await fetch("/api/spin/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const text = [data?.error, data?.details].filter(Boolean).join(": ");
+        alert(text || `HTTP_${res.status}`);
+        console.error("spin/start failed", data);
+        setSpinning(false);
+        return;
+      }
+
+      const ok = await res.json();
+      if (!ok?.ok) {
+        alert("UNEXPECTED_RESPONSE");
+        setSpinning(false);
+      } else {
+        // Deduct coins immediately on client for better UX; server already decremented too
+        setBalance((b) => Math.max(0, b - mode));
+      }
+    } catch (e: any) {
+      alert(`CLIENT_ERROR: ${String(e?.message || e)}`);
+      setSpinning(false);
     }
   }
 
-  /* Visuals */
-  const size=420, cx=size/2, cy=size/2, radius=size/2-6;
-  const count=Math.max(8, entries.length || 8);
-  const sliceAngle=360/count;
-  const colors=["#06b6d4","#f59e0b","#22c55e","#60a5fa","#f472b6","#a78bfa","#fb7185","#34d399"];
-
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_300px] gap-6 items-start">
-      <style jsx>{`
-        @keyframes spinLinear {
-          from { transform: rotate(0deg); }
-          to   { transform: rotate(360deg); }
-        }
-      `}</style>
-
-      {/* LEFT: Users */}
-      <div className="w-full">
-        <div className="text-lg font-semibold mb-3">Foydalanuvchilar</div>
-        <div className="space-y-2 max-h-[480px] overflow-auto pr-1">
-          {users.map(u=>(
-            <div key={u.id} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
-              <div className="truncate">
-                <div className="text-sm font-medium">{u.name || u.login}</div>
-                <div className="text-xs text-neutral-400">login: {u.login}</div>
-              </div>
-              <div className="text-emerald-300 font-semibold">{u.balance}</div>
-            </div>
-          ))}
-          {users.length===0 && <div className="text-sm text-neutral-400">Hozircha foydalanuvchilar yo‘q.</div>}
-        </div>
-      </div>
-
-      {/* CENTER: Wheel */}
-      <div className="flex flex-col items-center gap-4 w-full">
-        {/* Mode buttons */}
-        <div className="flex gap-2">
-          {[50,100,200].map(m=>(
-            <button key={m}
-              onClick={()=>setMode(m as 50|100|200)}
-              className={`px-4 py-2 rounded font-medium ${mode===m?'bg-emerald-600 text-white':'bg-white/10 hover:bg-white/20'}`}>
+    <div className="mx-auto max-w-6xl px-4 py-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      {/* LEFT – wheel */}
+      <div className="flex flex-col items-center gap-4">
+        {/* mode */}
+        <div className="flex gap-2 mb-2">
+          {[50, 100, 200].map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m as 50 | 100 | 200)}
+              className={`px-4 py-2 rounded ${mode === m ? "bg-emerald-600 text-white" : "bg-zinc-800 text-zinc-200"}`}
+              disabled={spinning}
+            >
               {m}
             </button>
           ))}
         </div>
 
-        {/* Banner */}
-        <div className="h-8 flex items-center">
-          {banner && (
-            <div className="px-4 py-1 rounded-md bg-amber-500/15 text-amber-300 text-sm">
-              <b>{banner}</b> aylantiryapti…
-            </div>
-          )}
-        </div>
+        {/* pointer label space */}
+        {message && (
+          <div className="text-amber-400 font-medium">{message}</div>
+        )}
 
-        {/* Wheel */}
-        <div className="relative">
-          <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[14px] border-r-[14px] border-b-[28px] border-l-transparent border-r-transparent border-b-yellow-400 drop-shadow" />
-          <div className="relative w-[460px] h-[460px] rounded-full bg-neutral-900 border-4 border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.5)] overflow-hidden">
-            <div ref={wheelRef} className="absolute inset-0" style={{transform:"rotate(0deg)"}}>
-              <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%">
-                <defs>
-                  <radialGradient id="shine" cx="50%" cy="50%" r="60%">
-                    <stop offset="0%" stopColor="rgba(255,255,255,0.08)" />
-                    <stop offset="70%" stopColor="rgba(255,255,255,0.02)" />
-                    <stop offset="100%" stopColor="rgba(255,255,255,0.00)" />
-                  </radialGradient>
-                </defs>
-                {Array.from({length:count}).map((_,i)=>{
-                  const label=entries[i % (entries.length||1)];
-                  const start=i*sliceAngle-90, end=start+sliceAngle;
-                  const path=arcPath(cx,cy,radius,start,end);
-                  const mid=(start+end)/2;
-                  const p=polar(cx,cy,radius*0.62,mid);
-                  const fill=colors[i%colors.length];
-                  return (
-                    <g key={i}>
-                      <path d={path} fill={fill} stroke="#0a0a0a" strokeWidth={2}/>
-                      <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle" fontSize={12}
-                        className="fill-white" transform={`rotate(${mid+90}, ${p.x}, ${p.y})`} style={{userSelect:"none"}}>
-                        {label ? label.name : "Prize"}
-                      </text>
-                    </g>
-                  );
-                })}
-                <circle cx={cx} cy={cy} r={radius} fill="url(#shine)" />
-              </svg>
-            </div>
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-24 h-24 rounded-full bg-neutral-950 border border-white/10 shadow-inner flex items-center justify-center text-xs text-neutral-300">
-                Super Aylana
-              </div>
-            </div>
+        {/* wheel */}
+        <div className="relative w-[520px] h-[520px]">
+          {/* top pointer */}
+          <div className="absolute left-1/2 -translate-x-1/2 -top-2 z-20">
+            <div className="w-0 h-0 border-l-[10px] border-r-[10px] border-b-[16px] border-l-transparent border-r-transparent border-b-yellow-400" />
+          </div>
+
+          {/* circle */}
+          <div
+            ref={circleRef}
+            className="absolute inset-0 rounded-full border-[10px] border-zinc-700 bg-zinc-900"
+          >
+            {/* You can keep your existing slice drawing here */}
           </div>
         </div>
 
-        {/* Controls */}
-        <div className="flex items-center gap-4">
-          <div className="px-4 py-2 rounded bg-white/5">Balance: <b>{me?.balance ?? 0}</b></div>
-          <button onClick={spin} disabled={spinning}
-            className={`px-6 py-3 rounded-xl font-semibold text-white ${spinning?'bg-gray-600':'bg-emerald-600 hover:bg-emerald-700'}`}>
+        {/* bottom controls */}
+        <div className="flex gap-4 items-center mt-2">
+          <div className="px-4 py-2 rounded bg-zinc-800 text-zinc-100">
+            Balance: <strong>{balance}</strong>
+          </div>
+          <button
+            onClick={startSpin}
+            disabled={spinning}
+            className={`px-5 py-2 rounded ${spinning ? "bg-zinc-700 text-zinc-300" : "bg-emerald-600 text-white"}`}
+          >
             {spinning ? "Aylanmoqda..." : `Aylantirish (${mode})`}
           </button>
         </div>
-        <div className="text-xs text-neutral-400">
-          Logged in as: <b>{me?.name}</b> (login: <b>{me?.login}</b>)
-        </div>
       </div>
 
-      {/* RIGHT: Recent wins */}
-      <div className="w-full">
-        <div className="text-lg font-semibold mb-3">So‘nggi yutuqlar</div>
-        <div className="space-y-3">
-          {wins.map(w=>(
-            <div key={w.id} className="p-3 rounded-xl bg-white/5">
-              <div className="text-sm"><b>{w.user}</b> — <span className="text-emerald-300">{w.prize}</span></div>
-              <div className="text-xs text-neutral-400">{new Date(w.time).toLocaleTimeString()}</div>
-            </div>
-          ))}
-          {wins.length===0 && <div className="text-sm text-neutral-400">Hozircha yutuqlar yo‘q.</div>}
-        </div>
+      {/* RIGHT – last 10 wins (if you already had a better UI, keep it) */}
+      <div className="space-y-3">
+        <h3 className="text-lg font-semibold text-zinc-100">So‘nggi yutuqlar</h3>
+        {feed.length === 0 ? (
+          <div className="text-sm text-zinc-400">Hozircha yutuqlar yo‘q.</div>
+        ) : (
+          <ul className="space-y-2">
+            {feed.map((f, i) => (
+              <li key={i} className="bg-zinc-800 text-zinc-100 rounded px-3 py-2">
+                <span className="font-medium">{f.who}</span> — {f.prize}
+                <span className="text-xs text-zinc-400 ml-2">{f.at}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-
-      {/* Popup */}
-      {popup && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={()=>setPopup(null)}>
-          <div className="bg-neutral-900 p-6 rounded-2xl max-w-md text-center space-y-3 shadow-xl">
-            {popup.imageUrl && <img src={popup.imageUrl} alt="" className="mx-auto w-40 h-40 object-cover rounded-xl" />}
-            <div className="text-lg text-white">
-              <b>{popup.user}</b> siz <b>{popup.prize}</b> yutib oldingiz!
-            </div>
-            <button className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded text-sm text-neutral-300">Yopish</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
