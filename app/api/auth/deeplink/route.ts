@@ -1,37 +1,53 @@
+// app/api/auth/deeplink/route.ts
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import crypto from "node:crypto";
-import { prisma } from "@/app/lib/prisma";
 import { setSession } from "@/app/lib/auth";
 
-function hmacSHA256(secret: string, data: string) {
-  return crypto.createHmac("sha256", secret).update(data).digest("hex");
+/**
+ * Supports both GET (query params) and POST (JSON body):
+ * - login?: string
+ * - tgid?: string
+ * - name?: string
+ *
+ * Example:
+ *   /api/auth/deeplink?tgid=677659703&name=Giyosiddin
+ *   /api/auth/deeplink?login=9999
+ *
+ * On success, sets cookies and redirects to /wheel (GET) or returns JSON (POST).
+ */
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const login = url.searchParams.get("login");
+  const tgid = url.searchParams.get("tgid");
+  const name = url.searchParams.get("name");
+
+  if (!login && !tgid) {
+    return NextResponse.json({ error: "missing_login_or_tgid" }, { status: 400 });
+  }
+
+  await setSession({ login: login || null, tgid: tgid || null, name: name || null });
+
+  // Redirect into the app
+  return NextResponse.redirect(new URL("/wheel", url), 302);
 }
 
 export async function POST(req: Request) {
-  const { tgid, username, sig } = await req.json() as { tgid: string; username?: string; sig: string };
-  if (!tgid || !sig) return NextResponse.json({ error: "bad_request" }, { status: 400 });
+  const body = (await req.json().catch(() => ({}))) as {
+    login?: string | null;
+    tgid?: string | null;
+    name?: string | null;
+  };
 
-  // Sign links in your bot like: HMAC_SHA256(TELEGRAM_BOT_TOKEN, `${tgid}:${username ?? ""}`)
-  const expected = hmacSHA256(process.env.TELEGRAM_BOT_TOKEN!, `${tgid}:${username ?? ""}`);
-  if (expected !== sig) return NextResponse.json({ error: "bad_signature" }, { status: 401 });
+  const login = body.login ?? null;
+  const tgid = body.tgid ?? null;
+  const name = body.name ?? null;
 
-  let user = await prisma.user.findUnique({ where: { tgid } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        tgid, login: tgid, name: username || `user_${tgid}`,
-        password: crypto.randomBytes(16).toString("hex")
-      }
-    });
-  }
-  // Promote if ADMIN_TGID matches
-  if (process.env.ADMIN_TGID === tgid && user.role !== "ADMIN") {
-    await prisma.user.update({ where: { id: user.id }, data: { role: "ADMIN" } });
+  if (!login && !tgid) {
+    return NextResponse.json({ error: "missing_login_or_tgid" }, { status: 400 });
   }
 
-  await setSession(user.id);
-  return NextResponse.json({ ok: true });
+  const user = await setSession({ login, tgid, name });
+  return NextResponse.json({ ok: true, user }, { status: 200 });
 }
