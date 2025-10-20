@@ -10,7 +10,7 @@ export type SessionUser = {
   id: string;
   login: string;
   name: string;
-  tgid: string | null;
+  tgid: string;        // <-- non-null, matches your Prisma model
   balance: number;
   role: "USER" | "ADMIN";
 };
@@ -19,13 +19,9 @@ function rand(n = 10) {
   return randomBytes(n).toString("hex").slice(0, n);
 }
 
-/** Low-level cookie setters used by all helpers */
+/** cookie helpers */
 function setCookie(key: string, value: string) {
-  cookies().set(key, value, {
-    httpOnly: false,
-    sameSite: "lax",
-    path: "/",
-  });
+  cookies().set(key, value, { httpOnly: false, sameSite: "lax", path: "/" });
 }
 function delCookie(key: string) {
   cookies().set(key, "", { path: "/", maxAge: 0 });
@@ -37,23 +33,21 @@ function extractIds(req?: Request) {
   const h = headers();
   const url = req ? new URL(req.url) : null;
 
-  const login =
+  const loginRaw =
     c.get("login")?.value ||
     h.get("x-login") ||
     (url ? url.searchParams.get("login") : "") ||
     "";
-
-  const tgid =
+  const tgidRaw =
     c.get("tgid")?.value ||
     h.get("x-telegram-id") ||
     h.get("x-tgid") ||
     (url ? url.searchParams.get("tgid") : "") ||
     "";
 
-  return {
-    login: login?.trim() || null,
-    tgid: tgid?.trim() || null,
-  };
+  const login = loginRaw.trim() || null;
+  const tgid  = tgidRaw.trim()  || null;
+  return { login, tgid };
 }
 
 /**
@@ -78,8 +72,7 @@ export async function getSessionUser(req?: Request): Promise<SessionUser | null>
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
     if (u) {
-      // keep cookies in sync
-      setCookie("tgid", u.tgid || "");
+      setCookie("tgid", u.tgid);
       setCookie("login", u.login);
       return u as SessionUser;
     }
@@ -92,39 +85,37 @@ export async function getSessionUser(req?: Request): Promise<SessionUser | null>
  * ensureUser:
  * Same as getSessionUser, but WILL create a user if none is found.
  * - If TGID exists → create login = tgid, name = user_<tgid>
- * - Otherwise create a guest user login = "guest-xxxx"
+ * - Otherwise create a guest with BOTH login and tgid = "guest-xxxx"
  * Also sets/refreshes cookies.
  */
 export async function ensureUser(req: Request): Promise<SessionUser> {
   const { login, tgid } = extractIds(req);
 
-  // 1) login cookie → fetch
+  // 1) Try login first
   if (login) {
     const byLogin = await prisma.user.findUnique({
       where: { login },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
     if (byLogin) {
-      // refresh TG cookie if necessary
-      if (byLogin.tgid) setCookie("tgid", byLogin.tgid);
+      setCookie("tgid", byLogin.tgid);
       setCookie("login", byLogin.login);
       return byLogin as SessionUser;
     }
   }
 
-  // 2) tgid → fetch or create
+  // 2) Try TGID, else create via TGID
   if (tgid) {
     const byTg = await prisma.user.findUnique({
       where: { tgid },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
     if (byTg) {
-      setCookie("tgid", byTg.tgid || "");
+      setCookie("tgid", byTg.tgid);
       setCookie("login", byTg.login);
       return byTg as SessionUser;
     }
 
-    // create new TG user
     const created = await prisma.user.create({
       data: {
         tgid,
@@ -135,23 +126,24 @@ export async function ensureUser(req: Request): Promise<SessionUser> {
       },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
-    setCookie("tgid", created.tgid || "");
+    setCookie("tgid", created.tgid);
     setCookie("login", created.login);
     return created as SessionUser;
   }
 
-  // 3) fallback → create guest
-  const guestLogin = `guest-${rand(8)}`;
+  // 3) Guest flow → both login and tgid set to the same unique string
+  const guestId = `guest-${rand(8)}`;
   const guest = await prisma.user.create({
     data: {
-      tgid: null,
-      login: guestLogin,
+      tgid: guestId,
+      login: guestId,
       name: "Guest",
       password: rand(16),
       balance: 0,
     },
     select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
   });
+  setCookie("tgid", guest.tgid);
   setCookie("login", guest.login);
   return guest as SessionUser;
 }
@@ -173,12 +165,8 @@ export async function requireUser(
 
 /**
  * setSession:
- * Utility for auth routes to establish a session explicitly.
- * It will upsert a user by login or tgid, then set cookies.
- *
- * Example payloads:
- *   setSession({ login: '9999', name: 'Alice' })
- *   setSession({ tgid: '123456', name: '@alice' })
+ * Establish a session explicitly. Will upsert user by login or tgid.
+ * Ensures `tgid` is NEVER null by mirroring login if needed.
  */
 export async function setSession(payload: {
   login?: string | null;
@@ -186,74 +174,45 @@ export async function setSession(payload: {
   name?: string | null;
 }): Promise<SessionUser> {
   const login = payload.login?.trim() || null;
-  const tgid = payload.tgid?.trim() || null;
+  const tgidIn = payload.tgid?.trim() || null;
   const name = (payload.name?.trim() || null) ?? null;
 
-  let user: SessionUser | null = null;
+  // prefer TGID; if absent but login present, mirror it
+  const tgid = tgidIn || login || `guest-${rand(8)}`;
+  const finalLogin = login || tgid;
 
-  if (login) {
-    const found = await prisma.user.findUnique({
-      where: { login },
-      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
-    });
-    if (found) {
-      user = found as SessionUser;
-    } else {
-      const created = await prisma.user.create({
-        data: {
-          login,
-          tgid,
-          name: name || (tgid ? `user_${tgid}` : "Guest"),
-          password: rand(16),
-          balance: 0,
-        },
-        select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
-      });
-      user = created as SessionUser;
-    }
-  } else if (tgid) {
-    const byTg = await prisma.user.findUnique({
-      where: { tgid },
-      select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
-    });
-    if (byTg) {
-      user = byTg as SessionUser;
-    } else {
-      const created = await prisma.user.create({
-        data: {
-          tgid,
-          login: tgid, // spec
-          name: name || `user_${tgid}`,
-          password: rand(16),
-          balance: 0,
-        },
-        select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
-      });
-      user = created as SessionUser;
-    }
-  } else {
-    // no identifiers → create guest
-    const created = await prisma.user.create({
+  let user = await prisma.user.findFirst({
+    where: { OR: [{ login: finalLogin }, { tgid }] },
+    select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+  });
+
+  if (!user) {
+    user = await prisma.user.create({
       data: {
-        tgid: null,
-        login: `guest-${rand(8)}`,
-        name: name || "Guest",
+        login: finalLogin,
+        tgid,
+        name: name || (tgid.startsWith("guest-") ? "Guest" : `user_${tgid}`),
         password: rand(16),
         balance: 0,
       },
       select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
     });
-    user = created as SessionUser;
+  } else {
+    // Optionally sync name if provided
+    if (name && name !== user.name) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { name },
+        select: { id: true, login: true, name: true, tgid: true, balance: true, role: true },
+      });
+    }
   }
 
-  // Set cookies for subsequent requests
-  if (user.tgid) setCookie("tgid", user.tgid);
+  setCookie("tgid", user.tgid);
   setCookie("login", user.login);
-
-  return user;
+  return user as SessionUser;
 }
 
-/** Optional: clear session (not required by your imports but handy) */
 export async function clearSession() {
   delCookie("login");
   delCookie("tgid");
